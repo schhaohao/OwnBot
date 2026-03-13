@@ -1,0 +1,62 @@
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build and distribution files
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Log files
+logs/
+*.log
+
+# Configuration files containing sensitive information
+~/.ownbot/config.json
+
+# Test files and directories
+test-results/
+coverage/
+
+# Temporary files
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Documentation build files
+docs/_build/
+
+# Local development files
+local/
+development/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local

@@ -1,12 +1,12 @@
- from __future__ import annotations
+from __future__ import annotations
  
- import httpx
- from loguru import logger
+import httpx
+from loguru import logger
  
- from ownbot.config import LLMConfig
+from ownbot.config import LLMConfig
  
  
- class OpenAICompatibleClient:
+class OpenAICompatibleClient:
      """Minimal OpenAI-compatible chat.completions client (no tool calls for MVP)."""
  
      def __init__(self, cfg: LLMConfig):
@@ -44,4 +44,3 @@
          except Exception as e:
              logger.exception("LLM call failed")
              return f"错误：调用 LLM 失败：{e}"
- 

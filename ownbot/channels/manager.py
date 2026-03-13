@@ -9,6 +9,7 @@ from ownbot.bus.events import OutboundMessage
 from ownbot.bus.queue import MessageBus
 from ownbot.channels.base import BaseChannel
 from ownbot.channels.telegram import TelegramChannel
+from ownbot.channels.whatsapp import WhatsAppChannel
 from ownbot.config.schema import AppConfig
 
 
@@ -37,6 +38,12 @@ class ChannelManager:
             telegram_channel = TelegramChannel(self.config.telegram, self.bus)
             self.channels[telegram_channel.name] = telegram_channel
             logger.info("Telegram channel enabled")
+
+        # WhatsApp channel
+        if self.config.whatsapp.enabled:
+            whatsapp_channel = WhatsAppChannel(self.config.whatsapp, self.bus)
+            self.channels[whatsapp_channel.name] = whatsapp_channel
+            logger.info("WhatsApp channel enabled")
 
         # Add other channels here as needed
 

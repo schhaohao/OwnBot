@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -10,10 +11,19 @@ from loguru import logger
 
 from ownbot.agent.context import ContextBuilder
 from ownbot.agent.memory import MemoryConsolidator
+from ownbot.agent.tools import (
+    ToolRegistry,
+    ListFilesTool,
+    ReadFileTool,
+    WriteFileTool,
+    ShellTool,
+    WebRequestTool,
+)
 from ownbot.bus.events import InboundMessage, OutboundMessage
 from ownbot.bus.queue import MessageBus
 from ownbot.config.schema import AppConfig
 from ownbot.providers.litellm_provider import LiteLLMProvider
+from ownbot.session import SessionManager
 
 
 class AgentLoop:
@@ -67,52 +77,20 @@ class AgentLoop:
         )
 
     def _create_session_manager(self):
-        """Create a simple session manager for MVP."""
-        # For MVP, we'll use a simple in-memory session manager
-        class SimpleSessionManager:
-            def __init__(self):
-                self.sessions = {}
-
-            def get_or_create(self, key):
-                if key not in self.sessions:
-                    self.sessions[key] = SimpleSession(key)
-                return self.sessions[key]
-
-            def save(self, session):
-                pass
-
-            def invalidate(self, key):
-                if key in self.sessions:
-                    del self.sessions[key]
-
-        class SimpleSession:
-            def __init__(self, key):
-                self.key = key
-                self.messages = []
-                self.updated_at = None
-
-            def get_history(self, max_messages=0):
-                return self.messages[-max_messages:] if max_messages > 0 else self.messages
-
-            def clear(self):
-                self.messages = []
-
-        return SimpleSessionManager()
+        """Create a session manager for conversation history."""
+        return SessionManager(workspace=self.workspace)
 
     def _create_tool_registry(self):
-        """Create a simple tool registry for MVP."""
-        # For MVP, we'll use a simple tool registry with no tools
-        class SimpleToolRegistry:
-            def get_definitions(self):
-                return []
+        """Create a tool registry with available tools."""
+        registry = ToolRegistry()
 
-            def execute(self, name, arguments):
-                return f"Tool {name} not implemented in MVP"
+        registry.register(ListFilesTool())
+        registry.register(ReadFileTool())
+        registry.register(WriteFileTool())
+        registry.register(ShellTool())
+        registry.register(WebRequestTool())
 
-            def get(self, name):
-                return None
-
-        return SimpleToolRegistry()
+        return registry
 
     @staticmethod
     def _strip_think(text: str | None) -> str | None:
@@ -276,21 +254,6 @@ class AgentLoop:
         # Slash commands
         cmd = msg.content.strip().lower()
         if cmd == "/new":
-            try:
-                if not await self.memory_consolidator.archive_unconsolidated(session):
-                    return OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="Memory archival failed, session not cleared. Please try again.",
-                    )
-            except Exception:
-                logger.exception("/new archival failed for {}", session.key)
-                return OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="Memory archival failed, session not cleared. Please try again.",
-                )
-
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
@@ -307,6 +270,7 @@ class AgentLoop:
             return OutboundMessage(
                 channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines),
             )
+
         await self.memory_consolidator.maybe_consolidate_by_tokens(session)
 
         history = session.get_history(max_messages=0)
@@ -345,37 +309,8 @@ class AgentLoop:
 
     def _save_turn(self, session: Any, messages: list[dict], skip: int) -> None:
         """Save new-turn messages into session, truncating large tool results."""
-        from datetime import datetime
         for m in messages[skip:]:
-            entry = dict(m)
-            role, content = entry.get("role"), entry.get("content")
-            if role == "assistant" and not content and not entry.get("tool_calls"):
-                continue  # skip empty assistant messages
-            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                entry["content"] = content[:self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
-            elif role == "user":
-                if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
-                    # Strip the runtime-context prefix, keep only the user text.
-                    parts = content.split("\n\n", 1)
-                    if len(parts) > 1 and parts[1].strip():
-                        entry["content"] = parts[1]
-                    else:
-                        continue
-                if isinstance(content, list):
-                    filtered = []
-                    for c in content:
-                        if c.get("type") == "text" and isinstance(c.get("text"), str) and c["text"].startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
-                            continue  # Strip runtime context from multimodal messages
-                        if (c.get("type") == "image_url"
-                                and c.get("image_url", {}).get("url", "").startswith("data:image/")):
-                            filtered.append({"type": "text", "text": "[image]"})
-                        else:
-                            filtered.append(c)
-                    if not filtered:
-                        continue
-                    entry["content"] = filtered
-            entry.setdefault("timestamp", datetime.now().isoformat())
-            session.messages.append(entry)
+            session.messages.append(m)
         session.updated_at = datetime.now()
 
     async def process_direct(

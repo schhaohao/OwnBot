@@ -683,7 +683,7 @@ class TelegramChannel(BaseChannel):
                 content_parts.insert(0, tag)
         content = "\n".join(content_parts) if content_parts else "[empty message]"
 
-        logger.debug("Telegram message from {}: {}...", sender_id, content[:50])
+        logger.debug("Telegram message from SenderId:{} (ChatId {}): {}...", sender_id, chat_id, content[:50])
 
         str_chat_id = str(chat_id)
         metadata = self._build_message_metadata(message, user)

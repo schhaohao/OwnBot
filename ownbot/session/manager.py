@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,13 @@ class SessionManager:
         """Ensure sessions directory exists."""
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
+    def _get_session_dir(self, key: str) -> Path:
+        """Get session-specific directory."""
+        safe_key = key.replace("/", "_").replace("\\", "_")
+        session_dir = self.sessions_dir / safe_key
+        session_dir.mkdir(parents=True, exist_ok=True)
+        return session_dir
+
     def _get_session_path(self, key: str) -> Path:
         """
         Get the file path for a session.
@@ -41,8 +49,8 @@ class SessionManager:
         Returns:
             Path to session file
         """
-        safe_key = key.replace("/", "_").replace("\\", "_")
-        return self.sessions_dir / f"{safe_key}.jsonl"
+        session_dir = self._get_session_dir(key)
+        return session_dir / "session.jsonl"
 
     def _load(self, key: str) -> Session | None:
         """
@@ -162,8 +170,12 @@ class SessionManager:
             return []
 
         session_keys = []
-        for path in self.sessions_dir.glob("*.jsonl"):
-            session_keys.append(path.stem)
+        for session_dir in self.sessions_dir.iterdir():
+            if session_dir.is_dir():
+                # Check if session.jsonl exists in the directory
+                session_path = session_dir / "session.jsonl"
+                if session_path.exists():
+                    session_keys.append(session_dir.name)
 
         return session_keys
 
@@ -177,12 +189,17 @@ class SessionManager:
         Returns:
             True if deleted, False otherwise
         """
-        path = self._get_session_path(key)
-        if not path.exists():
+        session_dir = self._get_session_dir(key)
+        session_path = session_dir / "session.jsonl"
+        if not session_path.exists():
             return False
 
         try:
-            path.unlink()
+            # Delete session file
+            session_path.unlink()
+            # Delete directory if empty
+            if not any(session_dir.iterdir()):
+                session_dir.rmdir()
             if key in self._cache:
                 del self._cache[key]
             return True

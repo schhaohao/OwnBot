@@ -78,7 +78,7 @@ We welcome all forms of feedback and suggestions!
 - [X] WhatsApp channel support
 - [X] Basic tool system (file, shell, network)
 - [X] Skill system framework
-- [X] Session management
+- [X] Session, memory management
 
 #### 🚧 In Progress
 

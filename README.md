@@ -1,254 +1,603 @@
- ## OwnBot（gateway + Telegram MVP）
+<div align="center">
 
-### 目标
-- 常驻 `gateway` 进程
-- Telegram long polling 收消息
-- 走一个最简单的 LLM 回答（OpenAI-compatible HTTP API）
+# 🤖 OwnBot
 
-### 整体架构
+**零基础入门 Agent 开发 —— 极简代码、零框架依赖、保姆教学，打造你自己的 OpenClaw**
 
-OwnBot 采用模块化架构设计，各模块之间通过消息总线进行通信，实现了解耦和可扩展性。以下是整体架构图：
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg?style=flat-square&logo=python)](https://www.python.org/) [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](LICENSE) [![Code Style](https://img.shields.io/badge/Code%20Style-Black-black.svg?style=flat-square)](https://github.com/psf/black) [![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
-```mermaid
-flowchart TD
-    subgraph 用户交互层
-        A[用户] -->|发送消息| B[Telegram 机器人]
-        B -->|接收消息| A
-    end
+[English](./README_EN.md) | **中文**
 
-    subgraph 通道层
-        B -->|消息| C[TelegramChannel]
-        C -->|响应| B
-        C -->|发布消息| D[ChannelManager]
-        D -->|分发消息| C
-    end
+</div>
 
-    subgraph 消息总线层
-        D -->|入站消息| E[MessageBus]
-        E -->|出站消息| D
-        E -->|入站消息| F[AgentLoop]
-        F -->|出站消息| E
-    end
+---
 
-    subgraph 代理层
-        F -->|处理消息| G[ContextBuilder]
-        G -->|构建上下文| F
-        F -->|存储记忆| H[MemoryStore]
-        H -->|检索记忆| F
-        F -->|调用工具| I[ToolRegistry]
-        I -->|工具结果| F
-    end
+## ✨ 项目简介
 
-    subgraph 提供者层
-        F -->|LLM 请求| J[LiteLLMProvider]
-        J -->|LLM 响应| F
-        J -->|API 调用| K[OpenAI 兼容 API]
-        K -->|API 响应| J
-    end
+> 🎓 **这是一个面向学习者的 Agent 入门项目**
 
-    subgraph 配置层
-        L[AppConfig] -->|配置| F
-        L -->|配置| C
-        L -->|配置| J
-    end
-```
+**OwnBot** 是一个专为**学生党**和**Agent 技术爱好者**设计的**学习项目**。我们的目标是：
 
-### 模块说明
+- 📚 **帮助理解 Agent 原理** - 从零开始实现 Agent Loop + ReAct 架构，不依赖任何 Agent 开发框架
+- 💡 **最少最简洁的代码** - 每一行代码都有清晰的注释，易于理解
+- 🎯 **最通俗易懂** - 用最直观的方式展示 Agent 的工作流程
+- 🔧 **可运行的完整系统** - 不只是概念，而是真正能工作的智能助手
 
-1. **CLI 命令模块** (`ownbot/cli/`)
-   - `commands.py`: 实现了 `onboard` 和 `gateway` 命令，用于初始化配置和启动服务
-   - 负责解析命令行参数并启动相应的服务
+### 🌟 为什么选择 OwnBot？
 
-2. **配置模块** (`ownbot/config/`)
-   - `schema.py`: 定义了 `AppConfig`、`LLMConfig` 和 `TelegramConfig` 数据模型
-   - `loader.py`: 实现了配置的加载和保存功能
-   - `paths.py`: 定义了数据目录、媒体目录、日志目录等路径
-   - 负责管理应用配置，确保配置的一致性和有效性
+市面上有很多 Agent 框架（如 LangChain、LangGraph、AutoGPT 等），但它们往往：
 
-3. **消息总线模块** (`ownbot/bus/`)
-   - `queue.py`: 实现了 `MessageBus` 类，用于通道和代理之间的消息传递
-   - 提供了入站和出站消息队列，实现了模块间的解耦
+- ❌ 封装过度，难以理解底层原理
+- ❌ 代码复杂，学习曲线陡峭
+- ❌ 依赖众多，环境配置困难
 
-4. **代理模块** (`ownbot/agent/`)
-   - `loop.py`: 实现了 `AgentLoop` 类，处理消息处理、LLM 调用和工具执行
-   - `context.py`: 实现了 `ContextBuilder` 类，构建对话上下文
-   - `memory.py`: 实现了 `MemoryStore` 和 `MemoryConsolidator` 类，管理会话记忆
-   - 负责处理用户消息，与 LLM 交互，并执行相应的操作
+**OwnBot 采用完全不同的思路**：
 
-5. **提供者模块** (`ownbot/providers/`)
-   - `base.py`: 定义了 `LLMProvider` 基类和相关数据结构
-   - `registry.py`: 实现了 `ProviderRegistry` 类，管理 LLM 提供者
-   - `litellm_provider.py`: 实现了 `LiteLLMProvider` 类，用于与 OpenAI 兼容的 API 交互
-   - 负责与 LLM API 进行通信，处理 API 调用和响应
+- ✅ **纯 Python 原生实现** - 不依赖任何 Agent 框架
+- ✅ **代码精简清晰** - 核心逻辑只有500 行
+- ✅ **从零构建** - 从消息接收到 LLM 调用，每一步都透明可见
+- ✅ **即学即用** - 边读代码边理解 Agent 是如何工作的
 
-6. **通道模块** (`ownbot/channels/`)
-   - `base.py`: 定义了 `BaseChannel` 抽象基类
-   - `manager.py`: 实现了 `ChannelManager` 类，管理通道的生命周期和消息分发
-   - `telegram.py`: 实现了 `TelegramChannel` 类，处理 Telegram 机器人的消息收发
-   - 负责接收用户消息并发送响应，支持多种通信渠道
+### 👥 适合谁？
 
-7. **会话模块** (`ownbot/session/`)
-   - `base.py`: 定义了 `Session` 类，存储会话信息和消息历史
-   - `manager.py`: 实现了 `SessionManager` 类，管理会话的创建、加载和保存
-   - 负责持久化会话状态，确保对话连续性
+| 人群                          | 收获                              |
+| ----------------------------- | --------------------------------- |
+| 🎓**AI/CS 学生党**      | 理解 Agent 核心原理，完成课程项目 |
+| 🔬**AI 技术爱好者**     | 亲手构建一个可运行的 Agent 系统   |
+| 👨‍🏫**教育工作者**    | 作为 Agent 教学的最佳实践案例     |
+| 🚀**创业者/独立开发者** | 快速搭建个人 AI 助手原型          |
 
-8. **工具模块** (`ownbot/agent/tools/`)
-   - `base.py`: 定义了 `Tool` 基类和 `ToolCall` 数据结构
-   - `registry.py`: 实现了 `ToolRegistry` 类，管理可用工具
-   - `filesystem.py`: 实现了文件系统相关工具（列出文件、读取文件、写入文件）
-   - `shell.py`: 实现了 shell 命令执行工具
-   - `web.py`: 实现了 HTTP 请求工具
-   - 提供了各种工具能力，扩展了 LLM 的功能
+### 🎯 核心特性
 
-### 实现的功能
+- **🚀 多平台支持** - 同时支持 Telegram 和 WhatsApp，一个机器人，多个入口
+- **🧠 智能架构** - 基于 ReAct (Reasoning + Acting) 架构，支持复杂任务处理
+- **🛠️ 工具系统** - 内置文件操作、Shell 命令、网络请求等实用工具
+- **📦 技能系统** - 模块化技能设计，轻松扩展新功能（如天气查询）
+- **💾 记忆管理** - 智能会话管理，支持记忆巩固，保持上下文连贯
+- **⚡ 异步高性能** - 基于 Python asyncio，高并发处理能力
+- **🔧 易于扩展** - 清晰的模块化设计，方便二次开发
 
-#### 核心功能
+---
 
-1. **Telegram 集成**
-   - 支持 Telegram 机器人的消息收发
-   - 支持私聊和群聊消息处理
-   - 支持消息回复和引用
-   - 支持媒体消息处理（图片、语音、文档等）
+## 🚧 项目状态
 
-2. **LLM 集成**
-   - 支持 OpenAI 兼容的 API
-   - 内置 LiteLLMProvider，支持多种 LLM 模型
-   - 实现了 API 调用的重试机制
+> 🟢 **Actively maintained** - 项目正在积极开发中
 
-3. **消息总线**
-   - 异步消息队列，实现模块间解耦
-   - 支持入站和出站消息处理
-   - 确保消息的可靠传递
+本项目目前处于 **Beta 阶段**，核心功能已经可用，但仍在持续迭代优化中。
 
-4. **会话管理**
-   - 持久化会话状态
-   - 会话隔离存储
-   - 支持会话历史管理
+> ⚠️ **注意**：作为学习项目，代码中难免存在 Bug 或不完善之处。如果你在使用过程中遇到问题，欢迎通过 GitHub Issues 提出批评指正，这对项目改进非常有帮助！
 
-5. **工具系统**
-   - 文件系统工具：列出文件、读取文件、写入文件
-   - Shell 工具：执行系统命令
-   - Web 工具：发送 HTTP 请求
-   - 动态工具注册和执行
+我们欢迎所有形式的反馈和建议！
 
-6. **智能记忆管理**
-   - 会话隔离的记忆文件
-   - 自动记忆巩固和压缩
-   - LLM 生成的智能总结
-   - 记忆文件持久化
+### 📋 开发路线图
 
-#### 技术特性
+#### ✅ 已实现
 
-1. **模块化架构**
-   - 清晰的模块划分
-   - 松耦合的设计
-   - 易于扩展和维护
+- [X] Agent Loop + ReAct 核心架构
+- [X] Telegram 通道支持
+- [X] WhatsApp 通道支持
+- [X] 基础工具系统（文件、Shell、网络）
+- [X] 技能系统框架
+- [X] 会话管理
 
-2. **异步处理**
-   - 使用 asyncio 实现异步操作
-   - 高效的消息处理
-   - 支持并发操作
+#### 🚧 进行中
 
-3. **会话隔离**
-   - 每个会话有独立的目录
-   - 会话文件和记忆文件完全隔离
-   - 避免会话间的相互干扰
+- [ ] 👤 **Human-in-the-Loop** - 关键操作需要人工确认
+- [ ] 🔌 **MCP 协议支持** - 接入 Model Context Protocol
+- [ ] 更完善的文档和教程
+- [ ] 更多内置技能（日历、邮件等）
 
-4. **智能压缩**
-   - 当会话消息过多时自动巩固
-   - 使用 LLM 生成会话总结
-   - 保留重要信息，删除冗余内容
+#### 📅 计划中的功能
 
-5. **安全机制**
-   - Telegram 消息来源验证
-   - 工具执行的安全限制
-   - 配置的权限控制
+| 功能                      | 描述                                | 优先级 |
+| ------------------------- | ----------------------------------- | ------ |
+| 💾**向量数据库**    | 支持 RAG，让 Agent 可以读取本地文档 | 🔴 高  |
+| 📱**更多平台**      | Discord、Slack、飞书等平台支持      | 🔴 高  |
+| 🧠**多 Agent 协作** | 支持多个 Agent 分工协作完成任务     | 🟡 中  |
+| 🎨**Web 管理界面**  | 提供可视化的配置和监控界面          | 🟡 中  |
+| 🔊**语音支持**      | 语音输入和语音回复                  | 🟢 低  |
 
-### 工作流程
+---
 
-1. **消息处理流程**
-   - 用户在 Telegram 发送消息
-   - TelegramChannel 接收消息并解析
-   - 消息通过 MessageBus 发送给 AgentLoop
-   - AgentLoop 构建上下文并调用 LLM
-   - LLM 生成响应
-   - 响应通过 MessageBus 发送回 TelegramChannel
-   - TelegramChannel 发送响应给用户
+## 📸 项目展示
 
-2. **会话管理流程**
-   - 收到消息时，SessionManager 获取或创建会话
-   - 会话保存消息历史
-   - 当会话消息超过阈值时，触发记忆巩固
-   - 记忆巩固生成会话总结并压缩历史
-   - 会话状态持久化到磁盘
+<div align="center">
 
-3. **记忆巩固流程**
-   - MemoryConsolidator 检查会话消息数量
-   - 当消息超过 50 条时，触发巩固
-   - 使用 LLM 生成会话总结
-   - 保存总结到记忆文件
-   - 只保留最近 20 条消息
-   - 生成 MEMORY.md 和 HISTORY.md 文件
-
-### 存储结构
+### 系统架构
 
 ```
-~/.ownbot/workspace/
-└── sessions/
-    ├── telegram_7034328084/  # 私聊会话
-    │   ├── session.jsonl      # 会话文件
-    │   ├── memories.json      # 记忆文件
-    │   ├── MEMORY.md          # 智能总结
-    │   ├── HISTORY.md         # 完整历史
-    │   └── archive_2026-03-14T14:00:00.md  # 归档文件
-    └── telegram_-5216315207/  # 群聊会话
-        ├── session.jsonl
-        ├── memories.json
-        ├── MEMORY.md
-        ├── HISTORY.md
-        └── archive_2026-03-14T14:05:00.md
+┌─────────────────────────────────────────────────────────────────┐
+│                        用户交互层 (User Layer)                    │
+│    ┌──────────────┐    ┌──────────────┐                         │
+│    │   Telegram   │    │   WhatsApp   │                         │
+│    └──────┬───────┘    └──────┬───────┘                         │
+└───────────┼───────────────────┼─────────────────────────────────┘
+            │                   │
+            ▼                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        消息总线层 (Bus Layer)                     │
+│              ┌─────────────────────────┐                        │
+│              │      MessageBus         │                        │
+│              │   ┌───────────────┐     │                        │
+│              │   │ Inbound Queue │     │                        │
+│              │   │ Outbound Queue│     │                        │
+│              │   └───────────────┘     │                        │
+│              └─────────────────────────┘                        │
+└─────────────────────────────────────────────────────────────────┘
+            │                   │
+            ▼                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        智能核心层 (Agent Layer)                   │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │                      AgentLoop                           │   │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │   │
+│  │  │   ReAct      │  │   Context    │  │   Session    │    │   │
+│  │  │   Engine     │  │   Builder    │  │   Manager    │    │   │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘    │   │
+│  └──────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+            │                   │
+            ▼                   ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        能力扩展层 (Capability Layer)              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │    Tools     │  │   Skills     │  │    LLM       │           │
+│  │  (文件/Shell) │  │  (天气/扩展)  │  │  (DeepSeek)  │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### 依赖
-- Python >= 3.11
+</div>
 
-### 安装
-在本目录执行：
+---
+
+## 🚀 快速开始
+
+### 环境要求
+
+- Python 3.10+
+- Node.js 18+ (用于 WhatsApp 支持)
+- macOS / Linux / Windows
+
+### 安装步骤
+
+#### 1. 克隆项目
 
 ```bash
-pip install -e .
+git clone https://github.com/schhaohao/OwnBot.git
+cd OwnBot
 ```
 
-### 配置
-运行一次 `onboard` 生成默认配置：
+#### 2. 安装依赖
+
+```bash
+# 创建虚拟环境
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+# 或 venv\Scripts\activate  # Windows
+
+# 安装 Python 依赖
+pip install -e .
+
+# 安装 WhatsApp Bridge 依赖
+cd whatsapp-bridge && npm install && cd ..
+```
+
+#### 3. 初始化配置
 
 ```bash
 ownbot onboard
 ```
 
-然后编辑 `~/.ownbot/config.json`（最小必填）：
+这会创建默认配置文件在 `~/.ownbot/config.json`
+
+#### 4. 编辑配置
+
+```bash
+# 编辑配置文件
+vim ~/.ownbot/config.json
+```
+
+**最小配置示例：**
 
 ```json
 {
+  "adminIds": ["your_telegram_user_id"],
   "telegram": {
     "enabled": true,
-    "token": "YOUR_TELEGRAM_BOT_TOKEN",
+    "token": "YOUR_BOT_TOKEN",
+    "allowFrom": ["*"]
+  },
+  "whatsapp": {
+    "enabled": true,
     "allowFrom": ["*"]
   },
   "llm": {
-    "apiBase": "https://api.openai.com/v1",
-    "apiKey": "sk-xxx",
-    "model": "gpt-4.1-mini"
+    "apiBase": "https://api.siliconflow.cn/v1",
+    "apiKey": "YOUR_API_KEY",
+    "model": "deepseek-ai/DeepSeek-V3.2",
+    "temperature": 0.7,
+    "maxTokens": 4096
   }
 }
 ```
 
-### 启动 gateway
+#### 5. 登录 WhatsApp（如需要）
+
+```bash
+ownbot channels login --channel whatsapp
+```
+
+whatsapp扫描终端显示的二维码完成登录。
+
+#### 6. 启动服务
 
 ```bash
 ownbot gateway
 ```
 
-### 安全提示
-- `allowFrom` 为空表示拒绝所有人；要公开访问请显式写 `["*"]`。
- 
+---
+
+## 📖 使用指南
+
+### 基础对话
+
+直接发送消息给机器人，它会智能回复：
+
+- **简单对话**：`你好`、`介绍一下自己`
+- **天气查询**：`北京今天天气怎么样？`
+- **文件操作**：`帮我创建一个 todo.txt 文件`
+- **网络搜索**：`搜索一下最新的 AI 新闻`
+
+### 工具使用
+
+机器人内置多种工具，可以通过自然语言调用：
+
+| 工具            | 示例                            | 说明            |
+| --------------- | ------------------------------- | --------------- |
+| `list_files`  | `查看当前目录文件`            | 列出目录内容    |
+| `read_file`   | `读取 README.md`              | 读取文件内容    |
+| `write_file`  | `创建 test.txt 写入 hello`    | 创建/写入文件   |
+| `shell`       | `执行 ls -la`                 | 执行 Shell 命令 |
+| `web_request` | `访问 https://api.github.com` | HTTP 请求       |
+
+### 技能系统
+
+技能是预定义的功能模块，放在 `ownbot/skills/` 目录：
+
+```
+ownbot/skills/
+├── weather/           # 天气查询技能
+│   ├── SKILL.md      # 技能定义
+├── translate/        # 翻译技能
+|   ├── SKILL.md      # 技能定义 
+└── your_skill/       # 你的自定义技能
+    └── SKILL.md
+```
+
+**SKILL.md 格式：**
+
+```markdown
+---
+name: weather
+description: 查询天气信息
+emoji: 🌤️
+---
+
+# Weather Skill
+
+查询指定城市的天气信息...
+```
+
+---
+
+## 🏗️ 系统架构
+
+### 核心模块
+
+| 模块                  | 职责     | 关键类                                                  |
+| --------------------- | -------- | ------------------------------------------------------- |
+| **Channels**    | 平台接入 | `TelegramChannel`, `WhatsAppChannel`                |
+| **Message Bus** | 消息路由 | `MessageBus`, `InboundMessage`, `OutboundMessage` |
+| **Agent**       | 智能核心 | `AgentLoop`, `ContextBuilder`, `SessionManager`   |
+| **Tools**       | 工具执行 | `ToolRegistry`, `FileSystemTool`, `ShellTool`     |
+| **Skills**      | 技能管理 | `SkillLoader`, `Skill`                              |
+| **LLM**         | 模型接入 | `LiteLLMProvider`                                     |
+
+### 消息处理流程
+
+```
+1. 接收 (Receive)
+   └─ 用户发送消息 → Channel 接收
+
+2. 入队 (Enqueue)
+   └─ 消息进入 MessageBus 入站队列
+
+3. 处理 (Process)
+   └─ AgentLoop 取出消息
+      ├─ SessionManager 加载/创建会话
+      ├─ ContextBuilder 构建上下文（含 ReAct 提示）
+      ├─ LLM 调用（ReAct 循环）
+      │   ├─ Thought: 分析思考
+      │   ├─ Action: 调用工具
+      │   ├─ Observation: 观察结果
+      │   └─ Final Answer: 生成回复
+      └─ 保存会话状态
+
+4. 出队 (Dequeue)
+   └─ 回复进入 MessageBus 出站队列
+
+5. 发送 (Send)
+   └─ Channel 发送给用户
+```
+
+---
+
+## ⚙️ 配置详解
+
+### 完整配置示例
+
+```json
+{
+  "adminIds": ["admin_telegram_user_id"], //针对telegram
+  "telegram": {
+    "enabled": true,
+    "token": "YOUR_BOT_TOKEN",
+    "allowFrom": ["*"],
+    "proxy": null,
+    "replyToMessage": false,
+    "groupPolicy": "mention"
+  },
+  "whatsapp": {
+    "enabled": true,
+    "allowFrom": ["*"],
+    "bridgeUrl": "ws://localhost:3001"
+  },
+  "llm": {
+    "apiBase": "https://api.openai.com/v1",
+    "apiKey": "YOUR_API_KEY",
+    "model": "gpt-4",
+    "temperature": 0.1,
+    "maxTokens": 8192
+  }
+}
+```
+
+### 配置项说明
+
+#### Telegram 配置
+
+| 配置项             | 类型    | 默认值    | 说明                                   |
+| ------------------ | ------- | --------- | -------------------------------------- |
+| `adminIds`       | array   | []        | 管理员用户 ID 列表，拥有特殊权限       |
+| `enabled`        | boolean | false     | 是否启用                               |
+| `token`          | string  | ""        | Bot Token（从 @BotFather 获取）        |
+| `allowFrom`      | array   | []        | 允许的用户 ID，`*` 表示所有人        |
+| `proxy`          | string  | null      | 代理地址，如 `http://127.0.0.1:7890` |
+| `replyToMessage` | boolean | false     | 是否引用原消息回复                     |
+| `groupPolicy`    | string  | "mention" | 群组策略：`mention` 或 `open`      |
+
+#### WhatsApp 配置
+
+| 配置项        | 类型    | 默认值                | 说明                  |
+| ------------- | ------- | --------------------- | --------------------- |
+| `enabled`   | boolean | false                 | 是否启用              |
+| `allowFrom` | array   | []                    | 允许的手机号或群组 ID |
+| `bridgeUrl` | string  | "ws://localhost:3001" | Bridge 服务地址       |
+
+#### LLM 配置
+
+| 配置项          | 类型   | 默认值                      | 说明            |
+| --------------- | ------ | --------------------------- | --------------- |
+| `apiBase`     | string | "https://api.openai.com/v1" | API 基础地址    |
+| `apiKey`      | string | ""                          | API 密钥        |
+| `model`       | string | "gpt-4"                     | 模型名称        |
+| `temperature` | float  | 0.7                         | 温度参数（0-2） |
+| `maxTokens`   | int    | 8192                        | 最大 Token 数   |
+
+---
+
+## 🛠️ 开发指南
+
+### 项目结构
+
+```
+ownbot/
+├── __init__.py
+├── __main__.py           # 入口点
+├── agent/                # 智能核心
+│   ├── __init__.py
+│   ├── context.py        # 上下文构建
+│   ├── loop.py          # Agent Loop + ReAct 主循环
+│   └── session.py       # 会话管理
+├── bus/                  # 消息总线
+│   ├── __init__.py
+│   ├── events.py        # 消息事件
+│   └── queue.py         # 消息队列
+├── channels/             # 平台通道
+│   ├── __init__.py
+│   ├── base.py          # 基础通道类
+│   ├── telegram.py      # Telegram 实现
+│   ├── whatsapp.py      # WhatsApp 实现
+│   └── manager.py       # 通道管理
+├── cli/                  # 命令行
+│   └── commands.py
+├── config/               # 配置管理
+│   ├── __init__.py
+│   └── schema.py
+├── skills/               # 技能系统
+│   ├── loader.py
+│   ├── models.py
+│   └── weather/         # 示例技能
+├── tools/                # 工具系统
+│   ├── registry.py
+│   └── tools.py
+└── utils/                # 工具函数
+    └── logger.py
+```
+
+### 添加自定义工具
+
+```python
+# ownbot/tools/tools.py
+
+async def my_custom_tool(param1: str, param2: int = 10) -> str:
+    """
+    我的自定义工具
+  
+    Args:
+        param1: 第一个参数
+        param2: 第二个参数，默认10
+  
+    Returns:
+        处理结果
+    """
+    # 实现逻辑
+    return f"处理结果: {param1}, {param2}"
+
+# 注册工具
+from ownbot.tools.registry import register_tool
+register_tool("my_tool", my_custom_tool)
+```
+
+### 添加自定义技能
+
+1. 创建技能目录：`ownbot/skills/my_skill/`
+2. 创建 `SKILL.md`：
+
+```markdown
+---
+name: my_skill
+description: 我的自定义技能
+emoji: 🚀
+---
+
+# My Skill
+
+这里是技能的详细说明...
+```
+
+#### 示例：创建一个"翻译"技能
+
+**步骤 1：创建技能目录**
+
+```bash
+mkdir -p ownbot/skills/translate
+```
+
+**步骤 2：创建 SKILL.md 文件**
+
+创建文件 `ownbot/skills/translate/SKILL.md`：
+
+```markdown
+
+---
+name: translate
+description: 翻译文本（使用 Google Translate）
+homepage: https://translate.google.com
+metadata:
+  ownbot:
+    emoji: "🌐"
+    requires:
+      bins: ["curl"]
+---
+
+# Translate Skill
+
+使用 Google Translate 翻译文本。
+
+## 使用示例
+
+翻译英文到中文：
+```bash
+curl -s "https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh&q=hello"
+、、、
+
+
+## 参数说明
+
+- `sl`: 源语言代码 (source language)
+  - `en`: 英语
+  - `zh`: 中文
+  - `ja`: 日语
+  - `ko`: 韩语
+  - `fr`: 法语
+  - `de`: 德语
+  - 更多语言代码参考 ISO 639-1 标准
+- `tl`: 目标语言代码 (target language)
+- `q`: 要翻译的文本（需要 URL 编码）
+```
+
+##### **使用示例**
+
+用户可以说：
+
+- "把 hello 翻译成中文"
+- "翻译 'Good morning' 成日语"
+- "这句话用英语怎么说：你好世界"
+
+```
+
+**步骤 3：重启服务**
+
+```bash
+# 停止当前服务 (Ctrl+C)
+# 重新启动
+ownbot gateway
+```
+
+启动后查看日志，确认技能已加载：
+
+```
+INFO  Loaded skill: weather 🌤️
+INFO  Loaded skill: translate 🌐
+```
+
+现在你可以对机器人说：
+
+- "翻译 'Hello World' 成中文"
+- "把 '早上好' 翻译成英语"
+
+---
+
+## 📜 开源协议
+
+本项目基于 [MIT](LICENSE) 协议开源。
+
+---
+
+## 🙏 致谢
+
+感谢以下开源项目的支持：
+
+- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - Telegram Bot 框架
+- [@whiskeysockets/baileys](https://github.com/WhiskeySockets/Baileys) - WhatsApp Web API
+- [Rich](https://github.com/Textualize/rich) - 终端美化
+
+---
+
+## 📮 联系我
+
+- 💬 **Issues**: [GitHub Issues](https://github.com/yourusername/ownbot/issues)
+- 📧 **Email**: sunchenhao518@163.com
+- 📱 **小红书**: [@真想不到](https://xhslink.com/m/WTYcSpJfdQ) (ID: schhaohao518)
+
+<div align="center">
+
+### 欢迎关注我的小红书
+
+<img src="docs/images/xiaohongshu-qr.jpg" width="200" alt="小红书二维码">
+
+**扫码关注，一起交流！**
+
+</div>
+
+---
+
+<div align="center">
+
+**⭐ 如果这个项目对你有帮助，请给我一个 Star！**
+
+**🚀 让我们一起打造更强大的 AI 助手！**
+
+</div>

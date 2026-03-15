@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import signal
+import sys
 from pathlib import Path
 
 import typer
 from loguru import logger
+
+# Import and setup logging first
+from ownbot.utils.logger import setup_logging, console
+setup_logging()
 
 from ownbot.agent import AgentLoop
 from ownbot.bus import MessageBus
@@ -16,10 +22,10 @@ app = typer.Typer(no_args_is_help=True)
 
 @app.command()
 def onboard() -> None:
-    """初始化配置文件（~/.ownbot/config.json）。"""
+    """初始化配置文件（~/.ownbot/config.json）。-"""
     path = save_config(AppConfig())
-    typer.echo(f"已生成配置：{path}")
-    typer.echo('下一步：编辑 telegram.token / telegram.allowFrom / llm.apiKey 等字段，然后运行：ownbot gateway')
+    console.print(f"[green]已生成配置：{path}[/green]")
+    console.print('[yellow]下一步：编辑 telegram.token / telegram.allowFrom / llm.apiKey 等字段，然后运行：ownbot gateway[/yellow]')
 
 
 @app.command()
@@ -61,219 +67,29 @@ def channels(
 
     if action == "login":
         if channel == "whatsapp":
-            typer.echo("正在启动 WhatsApp 登录...")
+            from ownbot.channels.whatsapp import WhatsAppChannel
+            whatsapp = WhatsAppChannel(cfg.whatsapp, bus)
             
-            # 检查并启动 bridge 服务器
-            import subprocess
-            import os
-            import time
+            console.print("[yellow]正在启动 WhatsApp 登录流程...[/yellow]")
+            console.print("[yellow]请确保已安装 Node.js 和 npm[/yellow]")
+            console.print()
             
-            bridge_dir = Path(__file__).parent.parent / "bridge"
-            if not bridge_dir.exists():
-                typer.echo("创建 bridge 服务器目录...")
-                bridge_dir.mkdir(parents=True, exist_ok=True)
-                
-                # 创建 package.json
-                package_json = bridge_dir / "package.json"
-                package_json.write_text('''{
-  "name": "ownbot-whatsapp-bridge",
-  "version": "1.0.0",
-  "description": "WhatsApp bridge server for OwnBot",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.18",
-    "ws": "^8.14.2",
-    "qrcode-terminal": "^0.12.0"
-  }
-}''')
-                
-                # 创建 server.js
-                server_js = bridge_dir / "server.js"
-                server_js.write_text('''const { default: makeWASocket, useMultiFileAuthState, Browsers, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
-const http = require('http');
-const WebSocket = require('ws');
-const fs = require('fs');
-const path = require('path');
-const qrcode = require('qrcode-terminal');
-
-// Create HTTP server
-const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('OwnBot WhatsApp Bridge Server');
-});
-
-// Create WebSocket server
-const wss = new WebSocket.Server({ server });
-
-wss.on('connection', async (ws) => {
-  console.log('Client connected');
-
-  // Load auth state
-  const authDir = path.join(__dirname, 'auth');
-  if (!fs.existsSync(authDir)) {
-    fs.mkdirSync(authDir, { recursive: true });
-  }
-
-  const { state, saveCreds } = await useMultiFileAuthState(authDir);
-  const { version } = await fetchLatestBaileysVersion();
-
-  // Create WhatsApp socket
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    browser: Browsers.macOS('Chrome')
-  });
-
-  // 统一事件处理
-  setupSockEvents(sock, ws, saveCreds);
-
-  // Handle messages from WS client
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message);
-      if (data.type === 'send') {
-        sock.sendMessage(data.to, { text: data.text });
-      } else if (data.type === 'auth') {
-        console.log('Auth token received:', data.token);
-      }
-    } catch (error) {
-      console.error('Error processing message:', error);
-    }
-  });
-
-  ws.on('close', () => {
-    console.log('Client disconnected');
-    sock.close();
-  });
-});
-
-server.listen(3001, () => {
-  console.log('OwnBot WhatsApp Bridge Server running on port 3001');
-  console.log('WebSocket URL: ws://localhost:3001');
-});
-
-// -------------------- 统一事件处理函数 --------------------
-function setupSockEvents(sock, ws, saveCreds) {
-  const authDir = path.join(__dirname, 'auth');
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      console.log('=======================================');
-      console.log('Scan this QR code with WhatsApp:');
-      console.log('=======================================');
-      qrcode.generate(qr, { small: false });
-      console.log('=======================================');
-      ws.send(JSON.stringify({ type: 'qr', qr }));
-    }
-
-    if (connection === 'close') {
-      const shouldReconnect = lastDisconnect.error?.output?.statusCode !== 401;
-      console.log('Connection closed', shouldReconnect ? 'reconnecting...' : 'not reconnecting');
-      if (shouldReconnect) {
-        setTimeout(async () => {
-          const { state, saveCreds } = await useMultiFileAuthState(authDir);
-          const newSock = makeWASocket({
-            auth: state,
-            browser: Browsers.macOS('Chrome')
-          });
-          setupSockEvents(newSock, ws, saveCreds);
-        }, 5000);
-      }
-    } else if (connection === 'open') {
-      console.log('Connected to WhatsApp');
-      ws.send(JSON.stringify({ type: 'status', status: 'connected' }));
-    }
-  });
-
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    for (const msg of messages) {
-      if (!msg.key.fromMe) {
-        const content = msg.message.conversation ||
-                        msg.message.extendedTextMessage?.text ||
-                        '[Voice Message]';
-
-        const media = [];
-        if (msg.message.imageMessage) {
-          try {
-            const buffer = await sock.downloadMediaMessage(msg.message.imageMessage);
-            const fileName = `image_${Date.now()}.jpg`;
-            const mediaDir = path.join(__dirname, 'media');
-            if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true });
-            const filePath = path.join(mediaDir, fileName);
-            fs.writeFileSync(filePath, buffer);
-            media.push(filePath);
-          } catch (err) {
-            console.error('Error downloading media:', err);
-          }
-        }
-
-        ws.send(JSON.stringify({
-          type: 'message',
-          sender: msg.key.remoteJid,
-          content: content,
-          id: msg.key.id,
-          timestamp: msg.messageTimestamp,
-          isGroup: msg.key.remoteJid.endsWith('@g.us'),
-          media
-        }));
-      }
-    }
-  });
-}''')
+            # Setup signal handler for graceful shutdown
+            def signal_handler(sig, frame):
+                console.print("\n[yellow]正在停止...[/yellow]")
+                asyncio.create_task(whatsapp.stop())
+                sys.exit(0)
             
-            # 检查是否安装了 Node.js
-            try:
-                subprocess.run(['node', '--version'], check=True, capture_output=True)
-                typer.echo("Node.js 已安装")
-            except subprocess.CalledProcessError:
-                typer.echo("错误：未安装 Node.js，请先安装 Node.js")
-                return
-            
-            # 安装依赖
-            typer.echo("安装 bridge 服务器依赖...")
-            subprocess.run(['npm', 'install'], cwd=bridge_dir, capture_output=True)
-            
-            # 启动 bridge 服务器
-            typer.echo("启动 bridge 服务器...")
-            bridge_process = subprocess.Popen(['npm', 'start'], cwd=bridge_dir)
-            
-            # 等待服务器启动
-            typer.echo("等待 bridge 服务器启动...")
-            time.sleep(3)
-            
-            typer.echo("扫描桥接终端中的 QR 码以登录 WhatsApp")
-            
-            from ownbot.channels import WhatsAppChannel
-            whatsapp_channel = WhatsAppChannel(cfg.whatsapp, bus)
-            
-            async def _login() -> None:
-                try:
-                    await whatsapp_channel.start()
-                except asyncio.CancelledError:
-                    pass
+            signal.signal(signal.SIGINT, signal_handler)
             
             try:
-                asyncio.run(_login())
+                asyncio.run(whatsapp.start())
             except KeyboardInterrupt:
-                typer.echo("登录已取消")
-            finally:
-                # 停止 bridge 服务器
-                bridge_process.terminate()
-                bridge_process.wait()
+                console.print("\n[yellow]登录流程已取消[/yellow]")
         else:
-            typer.echo(f"不支持的通道：{channel}")
+            console.print("[red]错误：请指定 --channel whatsapp[/red]")
     elif action == "status":
-        typer.echo("通道状态：")
-        typer.echo(f"Telegram: {'启用' if cfg.telegram.enabled else '禁用'}")
-        typer.echo(f"WhatsApp: {'启用' if cfg.whatsapp.enabled else '禁用'}")
+        console.print("[green]Telegram: {}[/green]".format("enabled" if cfg.telegram.enabled else "disabled"))
+        console.print("[green]WhatsApp: {}[/green]".format("enabled" if cfg.whatsapp.enabled else "disabled"))
     else:
-        typer.echo(f"不支持的操作：{action}")
-
-
+        console.print("[red]错误：未知操作 {}[/red]".format(action))

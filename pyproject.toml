@@ -1,28 +1,29 @@
- [project]
- name = "ownbot"
- version = "0.0.1"
- description = "OwnBot: minimal gateway + Telegram MVP"
- requires-python = ">=3.11"
- readme = "README.md"
- license = { text = "MIT" }
- dependencies = [
-   "typer>=0.12.3,<1.0.0",
-   "pydantic>=2.7.0,<3.0.0",
-   "pydantic-settings>=2.2.1,<3.0.0",
-   "python-telegram-bot[socks]>=22.6,<23.0",
-   "httpx>=0.28.0,<1.0.0",
-   "loguru>=0.7.2,<1.0.0",
-   "aiohttp>=3.9.1,<4.0.0",
-   "websockets"
- ]
- 
- [project.scripts]
- ownbot = "ownbot.cli:app"
- 
- [build-system]
- requires = ["hatchling"]
- build-backend = "hatchling.build"
- 
- [tool.hatch.build.targets.wheel]
- packages = ["ownbot"]
- 
+[project]
+name = "ownbot"
+version = "0.0.1"
+description = "OwnBot: minimal gateway + Telegram MVP"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+  "typer>=0.12.3,<1.0.0",
+  "pydantic>=2.7.0,<3.0.0",
+  "pydantic-settings>=2.2.1,<3.0.0",
+  "python-telegram-bot[socks]>=22.6,<23.0",
+  "httpx>=0.28.0,<1.0.0",
+  "loguru>=0.7.2,<1.0.0",
+  "aiohttp>=3.9.1,<4.0.0",
+  "websockets",
+  "rich>=13.0.0,<14.0.0",
+  "pyyaml>=6.0.0,<7.0.0"
+]
+
+[project.scripts]
+ownbot = "ownbot.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ownbot"]

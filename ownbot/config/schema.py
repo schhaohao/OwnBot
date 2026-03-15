@@ -26,6 +26,7 @@ class TelegramConfig(Base):
     reply_to_message: bool = False  # If true, bot replies quote the original message
     group_policy: Literal["open", "mention"] = "mention"  # "mention" responds when @mentioned or replied to, "open" responds to all
 
+
 class WhatsAppConfig(Base):
     """WhatsApp channel configuration."""
 
@@ -33,6 +34,7 @@ class WhatsAppConfig(Base):
     bridge_url: str = "ws://localhost:3001"  # URL of the WhatsApp bridge server
     bridge_token: str = ""  # Shared token for bridge auth (optional, recommended)
     allow_from: list[str] = Field(default_factory=list)  # Allowed phone numbers
+
 
 class LLMConfig(Base):
     """LLM configuration."""
@@ -43,16 +45,26 @@ class LLMConfig(Base):
     temperature: float = 0.1
     max_tokens: int = 8192
 
+
 class AppConfig(BaseSettings):
     """Root configuration for ownbot."""
 
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    admin_ids: list[str] = Field(
+        default_factory=list,
+        alias="adminIds",  # Support both admin_ids and adminIds
+        validation_alias="adminIds",
+    )  # Admin user IDs for sensitive commands like /restart
 
     @property
     def workspace_path(self) -> Path:
         """Get expanded workspace path."""
         return Path("~/.ownbot/workspace").expanduser()
 
-    model_config = ConfigDict(env_prefix="OWNBOT_", env_nested_delimiter="__")
+    model_config = ConfigDict(
+        env_prefix="OWNBOT_",
+        env_nested_delimiter="__",
+        populate_by_name=True,
+    )

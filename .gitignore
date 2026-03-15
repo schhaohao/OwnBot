@@ -3,6 +3,8 @@ venv/
 .env/
 .venv/
 env/
+.github/
+~/.ownbot/logs/
 
 # IDE and editor files
 .vscode/
@@ -53,7 +55,6 @@ docs/_build/
 # Local development files
 local/
 development/
-bridge/
 
 # Environment variables
 .env

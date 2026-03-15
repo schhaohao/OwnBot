@@ -1,0 +1,15 @@
+{
+  "name": "ownbot-whatsapp-bridge",
+  "version": "1.0.0",
+  "description": "WhatsApp Web bridge for OwnBot using Baileys",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "pino": "^8.21.0",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  }
+}

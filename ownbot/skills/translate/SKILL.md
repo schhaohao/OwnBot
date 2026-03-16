@@ -1,10 +1,17 @@
 ---
 name: translate
-description: 翻译文本（使用 web_request 工具调用 Google Translate API，支持多语言互译）
+description: Translate text between multiple languages using Google Translate API (no API key required).
 homepage: https://translate.google.com
 metadata:
   ownbot:
     emoji: "🌐"
+    keywords: [translate, translation, language, english, chinese, 翻译, 中文, 英文]
+    use_cases:
+      - "Translate 'hello' to Chinese"
+      - "How do you say 'weather' in Japanese?"
+      - "把'你好'翻译成英文"
+      - "Translate this paragraph to Spanish"
+    category: productivity
     requires:
       bins: ["curl"]
 ---

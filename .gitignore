@@ -62,3 +62,7 @@ development/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Milvus Lite data files
+milvus_data/
+*.db

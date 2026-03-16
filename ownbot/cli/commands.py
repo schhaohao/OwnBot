@@ -93,3 +93,40 @@ def channels(
         console.print("[green]WhatsApp: {}[/green]".format("enabled" if cfg.whatsapp.enabled else "disabled"))
     else:
         console.print("[red]错误：未知操作 {}[/red]".format(action))
+
+
+@app.command()
+def index_skills(
+    force: bool = typer.Option(False, "--force", "-f", help="强制重建索引"),
+    config: str | None = typer.Option(None, "--config", "-c", help="配置文件路径（默认 ~/.ownbot/config.json）"),
+) -> None:
+    """构建 Skill 向量索引（用于 RAG 检索）。"""
+    if config:
+        set_config_path(Path(config).expanduser().resolve())
+
+    cfg = load_config()
+    
+    if not cfg.retrieval.enabled:
+        console.print("[yellow]警告：RAG 检索未启用，请在配置中设置 retrieval.enabled = true[/yellow]")
+        return
+    
+    from ownbot.agent.context import ContextBuilder
+    
+    try:
+        context = ContextBuilder(
+            workspace=cfg.workspace_path,
+            enable_rag=True,
+            use_milvus_lite=cfg.retrieval.use_milvus_lite,
+            milvus_host=cfg.retrieval.milvus_host,
+            milvus_port=cfg.retrieval.milvus_port,
+            milvus_db_path=cfg.retrieval.milvus_db_path,
+            embedding_model=cfg.retrieval.embedding_model,
+        )
+        
+        console.print("[green]正在构建 Skill 索引...[/green]")
+        count = context.build_index(force_rebuild=force)
+        console.print(f"[green]成功索引 {count} 个 Skills[/green]")
+        
+    except Exception as e:
+        console.print(f"[red]错误：{e}[/red]")
+        logger.exception("Failed to build skill index")

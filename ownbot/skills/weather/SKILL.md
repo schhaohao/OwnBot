@@ -1,10 +1,17 @@
 ---
 name: weather
-description: Get current weather and forecasts (no API key required).
+description: Get current weather and forecasts for any city worldwide (no API key required).
 homepage: https://wttr.in/:help
 metadata:
   ownbot:
     emoji: "🌤️"
+    keywords: [weather, forecast, temperature, rain, sunny, 天气, 温度, 预报]
+    use_cases:
+      - "What's the weather in Beijing?"
+      - "Will it rain tomorrow in Shanghai?"
+      - "Current temperature in New York"
+      - "今天北京天气怎么样"
+    category: lifestyle
     requires:
       bins: ["curl"]
 ---

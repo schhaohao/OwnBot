@@ -15,7 +15,10 @@ dependencies = [
   "aiohttp>=3.9.1,<4.0.0",
   "websockets",
   "rich>=13.0.0,<14.0.0",
-  "pyyaml>=6.0.0,<7.0.0"
+  "pyyaml>=6.0.0,<7.0.0",
+  "pymilvus>=2.6.0,<3.0.0",
+  "sentence-transformers>=3.0.0,<4.0.0",
+  "torch>=2.6.0"
 ]
 
 [project.scripts]

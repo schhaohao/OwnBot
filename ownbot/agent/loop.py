@@ -65,7 +65,15 @@ class AgentLoop:
         self.max_iterations = 40
         self.context_window_tokens = 65_536
 
-        self.context = ContextBuilder(self.workspace)
+        self.context = ContextBuilder(
+            workspace=self.workspace,
+            enable_rag=cfg.retrieval.enabled,
+            use_milvus_lite=cfg.retrieval.use_milvus_lite,
+            milvus_host=cfg.retrieval.milvus_host,
+            milvus_port=cfg.retrieval.milvus_port,
+            milvus_db_path=cfg.retrieval.milvus_db_path,
+            embedding_model=cfg.retrieval.embedding_model,
+        )
         self.sessions = self._create_session_manager()
         self.tools = self._create_tool_registry()
 

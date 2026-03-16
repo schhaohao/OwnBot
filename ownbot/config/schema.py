@@ -46,12 +46,27 @@ class LLMConfig(Base):
     max_tokens: int = 8192
 
 
+class RetrievalConfig(Base):
+    """RAG-based skill retrieval configuration."""
+
+    enabled: bool = True  # Enable RAG-based skill retrieval
+    use_milvus_lite: bool = True  # Use Milvus Lite (embedded) instead of Milvus server
+    milvus_host: str = "localhost"  # Milvus server host (only used if use_milvus_lite=false)
+    milvus_port: int = 19530  # Milvus server port (only used if use_milvus_lite=false)
+    milvus_db_path: str = "./milvus_data/ownbot.db"  # Milvus Lite database file path
+    top_k: int = 50  # Number of skills to retrieve
+    collection_name: str = "ownbot_skills"  # Milvus collection name
+    embedding_model: str = "BAAI/bge-m3"  # Embedding model name (e.g., "BAAI/bge-m3", "all-MiniLM-L6-v2")
+    # Note: embedding dimension is automatically detected from the model
+
+
 class AppConfig(BaseSettings):
     """Root configuration for ownbot."""
 
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     admin_ids: list[str] = Field(
         default_factory=list,
         alias="adminIds",  # Support both admin_ids and adminIds

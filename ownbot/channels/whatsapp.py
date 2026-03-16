@@ -233,6 +233,11 @@ class WhatsAppChannel(BaseChannel):
                 while len(self._processed_message_ids) > 1000:
                     self._processed_message_ids.popitem(last=False)
 
+            # Skip newsletter/channel messages
+            if sender.endswith("@newsletter"):
+                logger.debug("Skipping newsletter message from {}", sender)
+                return
+
             # Extract just the phone number or lid as chat_id
             user_id = pn if pn else sender
             sender_id = user_id.split("@")[0] if "@" in user_id else user_id

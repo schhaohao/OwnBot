@@ -208,21 +208,39 @@ class SkillRetriever:
             return 0.0
         return dot / math.sqrt(norm_a * norm_b)
 
+    def _iter_skill_dirs(self) -> list[Path]:
+        """Return valid skill directories under the configured skills root."""
+        if not self.skills_dir.exists():
+            return []
+        return [
+            item for item in self.skills_dir.iterdir()
+            if item.is_dir() and not item.name.startswith("_") and (item / "SKILL.md").exists()
+        ]
+
+    def _collect_skill_metadata(self) -> list[dict[str, Any]]:
+        """Read metadata for all workspace skills."""
+        skills = []
+        for item in self._iter_skill_dirs():
+            metadata = self._extract_skill_metadata(item)
+            if metadata:
+                skills.append(metadata)
+        return skills
+
+    def _count_skill_dirs(self) -> int:
+        """Count workspace skills currently on disk."""
+        return len(self._iter_skill_dirs())
+
     def _build_fallback_index(self, force_rebuild: bool = False) -> int:
         if self._fallback_ready and not force_rebuild:
             return 0
 
-        skills = []
-        if self.skills_dir.exists():
-            for item in self.skills_dir.iterdir():
-                if item.is_dir() and not item.name.startswith("_"):
-                    metadata = self._extract_skill_metadata(item)
-                    if metadata:
-                        skills.append(metadata)
+        skills = self._collect_skill_metadata()
 
         if not skills:
             self._fallback_index = []
             self._fallback_ready = True
+            self._fallback_use_embeddings = False
+            logger.info("No workspace skills found in {}", self.skills_dir)
             return 0
 
         search_texts = [s["search_text"] for s in skills]
@@ -426,10 +444,8 @@ class SkillRetriever:
         client = self._get_client()
         if self._use_fallback or client is None:
             return self._build_fallback_index(force_rebuild=force_rebuild)
-        embedding_fn = self._get_embedding_fn()
-        
-        # Get embedding dimension dynamically
-        dimension = self.get_embedding_dimension()
+
+        skills = self._collect_skill_metadata()
         
         # Check if collection exists
         if client.has_collection(self.collection_name):
@@ -452,19 +468,22 @@ class SkillRetriever:
                 except Exception as e:
                     logger.warning("Failed to query collection: {}", e)
                     return 0
-        
-        # Scan all skills
-        skills = []
-        if self.skills_dir.exists():
-            for item in self.skills_dir.iterdir():
-                if item.is_dir() and not item.name.startswith("_"):
-                    metadata = self._extract_skill_metadata(item)
-                    if metadata:
-                        skills.append(metadata)
-        
+
         if not skills:
-            logger.warning("No skills found in {}", self.skills_dir)
+            if client.has_collection(self.collection_name):
+                client.drop_collection(self.collection_name)
+                logger.info(
+                    "Dropped collection {} because no workspace skills were found in {}",
+                    self.collection_name,
+                    self.skills_dir,
+                )
+            logger.info("No workspace skills found in {}", self.skills_dir)
             return 0
+
+        embedding_fn = self._get_embedding_fn()
+        
+        # Get embedding dimension dynamically
+        dimension = self.get_embedding_dimension()
         
         # Generate embeddings
         logger.info("Generating embeddings for {} skills using {}...", 
@@ -526,10 +545,24 @@ class SkillRetriever:
         Returns:
             List of skill search results
         """
+        logger.info(
+            "Starting skill vector search: query='{}', top_k={}, backend={}",
+            query,
+            top_k,
+            "fallback" if self._use_fallback else "milvus",
+        )
         if self._use_fallback:
-            return self._search_fallback(query, top_k)
+            results = self._search_fallback(query, top_k)
+            logger.info("Skill search finished with {} result(s) via fallback backend", len(results))
+            return results
         if not self._initialized:
             self._ensure_collection_exists()
+        else:
+            self._check_and_update_index()
+
+        if self._count_skill_dirs() == 0:
+            logger.info("Skipping workspace skill search because {} has no skills", self.skills_dir)
+            return []
         
         client = self._get_client()
         embedding_fn = self._get_embedding_fn()
@@ -561,7 +594,8 @@ class SkillRetriever:
                     "emoji": entity["emoji"],
                 }
             ))
-        
+
+        logger.info("Skill search finished with {} result(s) via Milvus", len(search_results))
         return search_results
     
     def _ensure_collection_exists(self):
@@ -578,6 +612,8 @@ class SkillRetriever:
         if not client.has_collection(self.collection_name):
             logger.info("Collection not found, building index...")
             self.build_index()
+        else:
+            self._check_and_update_index()
         # Note: We don't check for updates here to avoid rebuilding index on every search.
         # Index updates should be done explicitly via build_index(force_rebuild=True) or index-skills command.
         self._initialized = True
@@ -594,13 +630,7 @@ class SkillRetriever:
             self._build_fallback_index(force_rebuild=True)
             return len(self._fallback_index) != before
         try:
-            # Count current skills in filesystem
-            fs_skill_count = 0
-            if self.skills_dir.exists():
-                for item in self.skills_dir.iterdir():
-                    if item.is_dir() and not item.name.startswith("_"):
-                        if (item / "SKILL.md").exists():
-                            fs_skill_count += 1
+            fs_skill_count = self._count_skill_dirs()
             
             # Count skills in Milvus
             client = self._get_client()
@@ -638,13 +668,7 @@ class SkillRetriever:
             if not client.has_collection(self.collection_name):
                 return True
             
-            # Count current skills in filesystem
-            fs_skill_count = 0
-            if self.skills_dir.exists():
-                for item in self.skills_dir.iterdir():
-                    if item.is_dir() and not item.name.startswith("_"):
-                        if (item / "SKILL.md").exists():
-                            fs_skill_count += 1
+            fs_skill_count = self._count_skill_dirs()
             
             # Count skills in Milvus
             milvus_stats = client.get_collection_stats(self.collection_name)
@@ -693,8 +717,8 @@ class SkillRetriever:
         
         for skill in skills:
             emoji = skill.metadata.get("emoji", "🔧")
-            lines.append(f"{emoji} **{skill.name}**: {skill.description}")
+            lines.append(f"{emoji} **{skill.name}**: {skill.description} (doc path: {Path(skill.path) / 'SKILL.md'})")
         
-        lines.append("\nTo use a skill, read its SKILL.md file with `read_file` tool.")
+        lines.append("\nTo use a skill, read the exact doc path shown above with the `read_file` tool.")
         
         return "\n".join(lines)

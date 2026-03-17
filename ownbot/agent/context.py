@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -26,7 +27,8 @@ class ContextBuilder:
     def __init__(
         self,
         workspace: Path,
-        skills_dir: Optional[Path] = None,
+        builtin_skills_dir: Optional[Path] = None,
+        workspace_skills_dir: Optional[Path] = None,
         enable_rag: bool = True,
         use_milvus_lite: bool = True,
         milvus_host: str = "localhost",
@@ -39,7 +41,8 @@ class ContextBuilder:
         
         Args:
             workspace: Workspace directory
-            skills_dir: Directory containing skills (defaults to built-in skills)
+            builtin_skills_dir: Directory containing built-in skills bundled with OwnBot
+            workspace_skills_dir: Directory containing user-installed skills in the workspace
             enable_rag: Whether to enable RAG-based skill retrieval
             use_milvus_lite: Use Milvus Lite (embedded) instead of Milvus server
             milvus_host: Milvus server host (only used if use_milvus_lite=false)
@@ -47,15 +50,31 @@ class ContextBuilder:
             milvus_db_path: Path to Milvus Lite database file
             embedding_model: Embedding model name for RAG (e.g., "BAAI/bge-m3")
         """
-        self.workspace = workspace
-        
-        # Skill directories
-        if skills_dir is None:
-            skills_dir = Path(__file__).parent.parent / "skills"
-        self.skills_dir = skills_dir
-        
-        # Traditional skill loader (for on-demand loading)
-        self.skill_loader = SkillLoader(skills_dir)
+        self.workspace = workspace.resolve()
+
+        if builtin_skills_dir is None:
+            builtin_skills_dir = Path(__file__).parent.parent / "skills"
+        if workspace_skills_dir is None:
+            workspace_skills_dir = self.workspace / "skills"
+
+        self.builtin_skills_dir = builtin_skills_dir.resolve()
+        self.workspace_skills_dir = workspace_skills_dir.resolve()
+        self.workspace_skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # Keep a compatibility alias for callers that expect a single skills dir.
+        self.skills_dir = self.workspace_skills_dir
+
+        self.builtin_skill_loader = SkillLoader(self.builtin_skills_dir)
+        self.workspace_skill_loader = SkillLoader(self.workspace_skills_dir)
+        try:
+            self.builtin_skill_loader.load_all_skills()
+            logger.info(
+                "Loaded {} built-in skill(s) from {}",
+                len(self.builtin_skill_loader.list_skills()),
+                self.builtin_skills_dir,
+            )
+        except Exception as e:
+            logger.warning("Failed to load built-in skills from {}: {}", self.builtin_skills_dir, e)
         
         # RAG retriever (for initial skill discovery)
         self.enable_rag = enable_rag
@@ -63,7 +82,7 @@ class ContextBuilder:
         if enable_rag:
             try:
                 self.skill_retriever = SkillRetriever(
-                    skills_dir=skills_dir,
+                    skills_dir=self.workspace_skills_dir,
                     use_milvus_lite=use_milvus_lite,
                     milvus_host=milvus_host,
                     milvus_port=milvus_port,
@@ -110,6 +129,7 @@ class ContextBuilder:
 
         # ReAct System prompt
         system_prompt = self._build_system_prompt(current_message)
+        logger.info("Final system prompt:\n{}", system_prompt.strip())
         messages.append({"role": "system", "content": system_prompt.strip()})
 
         # Add history
@@ -126,14 +146,146 @@ class ContextBuilder:
         messages.append({"role": "user", "content": user_content})
 
         return messages
+
+    def add_assistant_message(
+        self,
+        messages: List[dict[str, Any]],
+        content: Optional[str],
+        tool_calls: Optional[List[dict[str, Any]]] = None,
+        reasoning_content: Optional[str] = None,
+    ) -> List[dict[str, Any]]:
+        """Append an assistant message in the format expected by the provider."""
+        msg: dict[str, Any] = {"role": "assistant"}
+        if content:
+            msg["content"] = content
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        if reasoning_content:
+            msg["reasoning_content"] = reasoning_content
+        messages.append(msg)
+        return messages
+
+    def add_tool_result(
+        self,
+        messages: List[dict[str, Any]],
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
+    ) -> List[dict[str, Any]]:
+        """Append a tool result message so the next LLM turn can observe it."""
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
+            "content": f"Observation: {result}",
+        })
+        return messages
+
+    def parse_react_response(self, content: str) -> dict[str, Any]:
+        """Parse a ReAct-formatted assistant response."""
+        result = {
+            "thought": None,
+            "action": None,
+            "action_input": None,
+            "final_answer": None,
+        }
+
+        if not content:
+            return result
+
+        result["thought"] = self._extract_thought(content)
+        action = self._extract_section(content, "Action")
+        action_input = self._extract_section(content, "Action Input")
+        final_answer = self._extract_final_answer(content)
+
+        if action:
+            result["action"] = action.strip()
+        if action_input:
+            result["action_input"] = self._strip_code_fence(action_input.strip())
+        if final_answer:
+            result["final_answer"] = final_answer.strip()
+
+        return result
+
+    def _extract_thought(self, content: str) -> Optional[str]:
+        """Extract the Thought section, falling back to a short preview."""
+        normalized = content.strip()
+        if not normalized:
+            return None
+
+        patterns = (
+            r"(?:^|\n)\s*Thought:\s*(.*?)(?=\n\s*(?:Action:|Final Answer:|$))",
+            r"Thought:\s*(.+?)(?=\n[A-Za-z_][A-Za-z_ ]*:|$)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, normalized, re.DOTALL | re.IGNORECASE)
+            if match:
+                thought = match.group(1).strip()
+                if thought:
+                    return thought
+
+        if all(marker not in normalized for marker in ("Thought:", "Action:", "Final Answer:")):
+            first_line = normalized.splitlines()[0].strip()
+            return first_line or None
+
+        return None
+
+    def _extract_final_answer(self, content: str) -> Optional[str]:
+        """Extract the final answer, tolerating slightly off-format model output."""
+        normalized = content.strip()
+        if not normalized:
+            return None
+
+        patterns = (
+            r"(?:^|\n)\s*Final Answer:\s*(.*?)(?=\n[A-Za-z_][A-Za-z_ ]*:|$)",
+            r"\*\*Final Answer\*\*:\s*(.*?)(?=\n[A-Za-z_][A-Za-z_ ]*:|$)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, normalized, re.DOTALL | re.IGNORECASE)
+            if match:
+                answer = match.group(1).strip()
+                if answer:
+                    return answer
+
+        if "Thought:" in normalized and "Action:" not in normalized:
+            last_thought_idx = normalized.rfind("Thought:")
+            after_thought = normalized[last_thought_idx + len("Thought:"):].strip()
+            if after_thought:
+                return after_thought
+
+        if all(marker not in normalized for marker in ("Thought:", "Action:", "Final Answer:")):
+            return normalized
+
+        return None
+
+    def _extract_section(self, content: str, section_name: str) -> Optional[str]:
+        """Extract a labeled ReAct section from the content."""
+        if not content:
+            return None
+
+        pattern = rf"(?:^|\n)\s*{re.escape(section_name)}:\s*(.*?)(?=\n[A-Za-z_][A-Za-z_ ]*:|$)"
+        match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return None
+
+        value = match.group(1).strip()
+        return value or None
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        """Remove surrounding markdown fences from Action Input content."""
+        fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
+        if fenced:
+            return fenced.group(1).strip()
+        return text
     
     def _build_system_prompt(self, current_message: str) -> str:
         """
         Build the system prompt with progressive skill disclosure.
         
         Strategy:
-        1. If RAG enabled: Search top 50 skills, show only names+descriptions
-        2. Agent decides which skill to use
+        1. Built-in skills are always listed in the system prompt
+        2. Workspace skills are retrieved via RAG and shown on demand
         3. Agent loads full skill content with read_file tool
         """
         # Base ReAct instructions
@@ -176,74 +328,90 @@ Guidelines:
 - If you're unsure, ask for clarification
 - Respect user privacy
 """
-        
-        # Add skills section using progressive disclosure
-        skills_prompt = self._build_skills_prompt(current_message)
-        if skills_prompt:
-            base_prompt += "\n\n" + skills_prompt
+
+        builtin_prompt = self._build_builtin_skills_prompt()
+        if builtin_prompt:
+            base_prompt += "\n\n" + builtin_prompt
+
+        workspace_prompt = self._build_workspace_skills_prompt(current_message)
+        if workspace_prompt:
+            base_prompt += "\n\n" + workspace_prompt
         
         return base_prompt
     
-    def _build_skills_prompt(self, current_message: str) -> str:
+    def _build_builtin_skills_prompt(self) -> str:
+        """Build the built-in skills section of the system prompt."""
+        try:
+            self.builtin_skill_loader.load_all_skills()
+            skills = self.builtin_skill_loader.list_skills()
+
+            if not skills:
+                return ""
+
+            lines = ["## Built-in Skills\n"]
+            lines.append("These built-in skills are always available and do not use vector retrieval:\n")
+
+            for skill in skills:
+                emoji = skill.metadata.emoji if skill.metadata else "🔧"
+                skill_doc_path = skill.path if skill.path else (self.builtin_skills_dir / skill.name / "SKILL.md")
+                lines.append(f"{emoji} **{skill.name}**: {skill.description} (doc path: {skill_doc_path})")
+
+            lines.append("\nIf you need a built-in skill, read the exact doc path shown above with the `read_file` tool.")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning("Failed to build built-in skills prompt: {}", e)
+            return ""
+
+    def _build_workspace_skills_prompt(self, current_message: str) -> str:
         """
-        Build the skills section of the system prompt.
+        Build the workspace skills section of the system prompt.
         
-        Uses RAG to find relevant skills, then shows only summaries.
+        Uses RAG to find relevant user-installed skills, then shows only summaries.
         The agent must use read_file to load full skill content.
         """
         if not self.enable_rag or self.skill_retriever is None:
-            # Fallback: list all skills without RAG
-            return self._build_fallback_skills_prompt()
+            return ""
         
         try:
-            # RAG search for top 50 relevant skills
             relevant_skills = self.skill_retriever.search(current_message, top_k=50)
+            logger.info("Skill retrieval query: {}", current_message)
             
             if not relevant_skills:
+                logger.info("Workspace skill retrieval returned no matches")
                 return ""
+
+            log_preview = [
+                f"{skill.name} score={skill.score:.4f} path={skill.path}"
+                for skill in relevant_skills[:10]
+            ]
+            logger.info(
+                "Skill retrieval results (top {}): {}",
+                min(len(log_preview), len(relevant_skills)),
+                " | ".join(log_preview),
+            )
             
-            lines = ["## Available Skills\n"]
-            lines.append(f"Based on your query, here are {len(relevant_skills)} relevant skills you can use:\n")
+            lines = ["## Workspace Skills\n"]
+            lines.append(
+                f"Based on your query, here are {len(relevant_skills)} relevant user-installed skills from ~/.ownbot/workspace/skills:\n"
+            )
             
             for skill in relevant_skills:
                 emoji = skill.metadata.get("emoji", "🔧")
-                lines.append(f"{emoji} **{skill.name}**: {skill.description}")
+                skill_doc_path = Path(skill.path) / "SKILL.md"
+                lines.append(f"{emoji} **{skill.name}**: {skill.description} (doc path: {skill_doc_path})")
             
-            lines.append("\n### How to Use Skills")
+            lines.append("\n### How to Use Workspace Skills")
             lines.append("1. Choose the most relevant skill from the list above")
-            lines.append("2. Read its full documentation using the `read_file` tool:")
+            lines.append("2. Read its full documentation using the exact doc path shown above with the `read_file` tool:")
             lines.append(f"   Action: read_file")
-            lines.append(f"   Action Input: {{\"path\": \"/skills/{{skill_name}}/SKILL.md\"}}")
+            lines.append(f"   Action Input: {{\"path\": \"/Users/example/.ownbot/workspace/skills/<skill_name>/SKILL.md\"}}")
             lines.append("3. Follow the instructions in the SKILL.md file")
             lines.append("4. Use appropriate tools to complete the task")
             
             return "\n".join(lines)
             
         except Exception as e:
-            # Fallback if RAG fails
-            return self._build_fallback_skills_prompt()
-    
-    def _build_fallback_skills_prompt(self) -> str:
-        """Fallback: List all available skills without RAG."""
-        try:
-            self.skill_loader.load_all_skills()
-            skills = self.skill_loader.list_skills()
-            
-            if not skills:
-                return ""
-            
-            lines = ["## Available Skills\n"]
-            lines.append("You have access to the following skills:\n")
-            
-            for skill in skills:
-                emoji = skill.metadata.emoji if skill.metadata else "🔧"
-                lines.append(f"{emoji} **{skill.name}**: {skill.description}")
-            
-            lines.append("\nTo use a skill, read its SKILL.md file with the `read_file` tool.")
-            
-            return "\n".join(lines)
-            
-        except Exception:
+            logger.warning("Failed to build workspace skills prompt: {}", e)
             return ""
     
     def build_index(self, force_rebuild: bool = False) -> int:

@@ -99,9 +99,27 @@ class AgentLoop:
         """Create a tool registry with available tools."""
         registry = ToolRegistry()
 
-        registry.register(ListFilesTool())
-        registry.register(ReadFileTool())
-        registry.register(WriteFileTool())
+        registry.register(
+            ListFilesTool(
+                workspace=self.workspace,
+                skills_dir=self.context.workspace_skills_dir,
+                builtin_skills_dir=self.context.builtin_skills_dir,
+            )
+        )
+        registry.register(
+            ReadFileTool(
+                workspace=self.workspace,
+                skills_dir=self.context.workspace_skills_dir,
+                builtin_skills_dir=self.context.builtin_skills_dir,
+            )
+        )
+        registry.register(
+            WriteFileTool(
+                workspace=self.workspace,
+                skills_dir=self.context.workspace_skills_dir,
+                builtin_skills_dir=self.context.builtin_skills_dir,
+            )
+        )
         registry.register(ShellTool())
         registry.register(WebRequestTool())
 
@@ -113,6 +131,19 @@ class AgentLoop:
         if not text:
             return None
         return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
+
+    @staticmethod
+    def _dump_for_log(data: Any) -> str:
+        """Serialize request payloads for readable logging."""
+        try:
+            return json.dumps(data, ensure_ascii=False, indent=2, default=str)
+        except TypeError:
+            return str(data)
+
+    def _log_llm_request(self, iteration: int, messages: list[dict], tool_defs: list[dict[str, Any]]) -> None:
+        """Log the exact payload sent to the model for this iteration."""
+        logger.info("LLM request messages for iteration {}:\n{}", iteration, self._dump_for_log(messages))
+        logger.info("LLM tool definitions for iteration {}:\n{}", iteration, self._dump_for_log(tool_defs))
 
     async def _execute_tool_with_error_handling(self, tool_call) -> tuple[str, str]:
         """Execute a tool with error handling, returning (tool_name, result)."""
@@ -147,6 +178,8 @@ class AgentLoop:
 
             if agent_logger:
                 agent_logger.log_progress("正在调用 LLM...")
+
+            self._log_llm_request(iteration, messages, tool_defs)
 
             response = await self.provider.chat_with_retry(
                 messages=messages,

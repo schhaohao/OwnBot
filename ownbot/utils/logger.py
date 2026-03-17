@@ -20,6 +20,7 @@ from rich.logging import RichHandler
 # Create a custom theme for OwnBot
 OWNBOT_THEME = Theme({
     "thought": "blue",
+    "reasoning": "magenta",
     "action": "yellow",
     "observation": "cyan",
     "final": "green",
@@ -62,8 +63,9 @@ class AgentLogger:
     """
     Structured logger for Agent Loop observability.
     
-    Provides colored output for different stages of the ReAct loop:
-    - [思考中] Blue - LLM thinking process
+    Provides colored output for different stages of the agent loop:
+    - [模型推理] Magenta - Hidden model reasoning shown only in logs
+    - [工具前说明] Blue - Model-provided note before a tool call
     - [调用工具] Yellow - Tool execution
     - [观察结果] Cyan - Tool results
     - [最终回复] Green - Final answer
@@ -79,12 +81,23 @@ class AgentLogger:
         self.iteration = iteration
         console.print()
         console.rule(f"[bold blue]Iteration {iteration}[/bold blue]", style="blue")
+
+    def log_reasoning(self, reasoning: str):
+        """Log hidden model reasoning in magenta for debugging only."""
+        display = reasoning[:1500] + "..." if len(reasoning) > 1500 else reasoning
+        panel = Panel(
+            Text(display, style="reasoning"),
+            title="[bold magenta]🧠 模型推理[/bold magenta]",
+            border_style="magenta",
+            padding=(1, 2),
+        )
+        console.print(panel)
     
     def log_thought(self, thought: str):
-        """Log LLM thinking process in blue."""
+        """Log model-provided note before a tool call."""
         panel = Panel(
             Text(thought, style="thought"),
-            title="[bold blue]💭 思考中[/bold blue]",
+            title="[bold blue]📝 工具前说明[/bold blue]",
             border_style="blue",
             padding=(1, 2),
         )

@@ -64,6 +64,7 @@ class SkillRetriever:
         "BAAI/bge-large-en": 1024,
         "BAAI/bge-base-en": 768,
     }
+    _EMBEDDING_MODEL_CACHE: dict[str, Any] = {}
     
     def __init__(
         self,
@@ -182,9 +183,15 @@ class SkillRetriever:
         if self._embedding_fn is None:
             try:
                 from sentence_transformers import SentenceTransformer
-                logger.info("Loading embedding model: {}...", self.embedding_model)
-                self._embedding_fn = SentenceTransformer(self.embedding_model)
-                logger.info("Loaded embedding model: {}", self.embedding_model)
+                cached = self._EMBEDDING_MODEL_CACHE.get(self.embedding_model)
+                if cached is not None:
+                    self._embedding_fn = cached
+                    logger.info("Reusing cached embedding model: {}", self.embedding_model)
+                else:
+                    logger.info("Loading embedding model: {}...", self.embedding_model)
+                    self._embedding_fn = SentenceTransformer(self.embedding_model)
+                    self._EMBEDDING_MODEL_CACHE[self.embedding_model] = self._embedding_fn
+                    logger.info("Loaded embedding model: {}", self.embedding_model)
             except ImportError:
                 logger.error("sentence-transformers not installed. Run: pip install sentence-transformers")
                 raise
@@ -192,6 +199,22 @@ class SkillRetriever:
                 logger.error("Failed to load embedding model '{}': {}", self.embedding_model, e)
                 raise
         return self._embedding_fn
+
+    def warm_up_query_embedding(self) -> None:
+        """Warm the embedding model if workspace search will need it."""
+        if self._count_skill_dirs() == 0:
+            logger.info("Skipping embedding warm-up because {} has no workspace skills", self.skills_dir)
+            return
+        if self._use_fallback and os.environ.get("OWNBOT_FALLBACK_USE_EMBEDDINGS", "").lower() not in {
+            "1",
+            "true",
+            "yes",
+        }:
+            logger.info("Skipping embedding warm-up because fallback search is lexical-only")
+            return
+
+        self._get_embedding_fn()
+        logger.info("Embedding model is warmed up for workspace skill search")
 
     def _tokenize(self, text: str) -> set[str]:
         return set(re.findall(r"[a-z0-9_]+", text.lower()))
@@ -229,6 +252,24 @@ class SkillRetriever:
     def _count_skill_dirs(self) -> int:
         """Count workspace skills currently on disk."""
         return len(self._iter_skill_dirs())
+
+    def _workspace_skill_paths(self) -> set[str]:
+        """Return current workspace skill directory paths."""
+        return {str(item.resolve()) for item in self._iter_skill_dirs()}
+
+    def _get_indexed_skill_rows(self) -> list[dict[str, Any]]:
+        """Return indexed skill rows from Milvus for count/path comparison."""
+        client = self._get_client()
+        if client is None or not client.has_collection(self.collection_name):
+            return []
+
+        results = client.query(
+            collection_name=self.collection_name,
+            filter="",
+            output_fields=["name", "path"],
+            limit=10000,
+        )
+        return [row for row in results if isinstance(row, dict)]
 
     def _build_fallback_index(self, force_rebuild: bool = False) -> int:
         if self._fallback_ready and not force_rebuild:
@@ -453,21 +494,32 @@ class SkillRetriever:
                 client.drop_collection(self.collection_name)
                 logger.info("Dropped existing collection: {}", self.collection_name)
             else:
-                # Collection exists, return current count
                 try:
-                    results = client.query(
-                        collection_name=self.collection_name,
-                        filter="",
-                        output_fields=["name"],
-                        limit=10000
-                    )
+                    results = self._get_indexed_skill_rows()
                     count = len(results)
-                    logger.info("Collection {} already exists with {} skills, skipping build", 
-                               self.collection_name, count)
-                    return count
+                    current_paths = self._workspace_skill_paths()
+                    indexed_paths = {
+                        row.get("path") for row in results if row.get("path")
+                    }
+
+                    if count != len(skills) or indexed_paths != current_paths:
+                        logger.info(
+                            "Collection {} is stale (milvus_count={}, fs_count={}), rebuilding index",
+                            self.collection_name,
+                            count,
+                            len(skills),
+                        )
+                        client.drop_collection(self.collection_name)
+                        logger.info("Dropped existing collection: {}", self.collection_name)
+                    else:
+                        logger.info(
+                            "Collection {} already matches {} workspace skill(s), skipping build",
+                            self.collection_name,
+                            count,
+                        )
+                        return count
                 except Exception as e:
                     logger.warning("Failed to query collection: {}", e)
-                    return 0
 
         if not skills:
             if client.has_collection(self.collection_name):
@@ -632,17 +684,16 @@ class SkillRetriever:
         try:
             fs_skill_count = self._count_skill_dirs()
             
-            # Count skills in Milvus
-            client = self._get_client()
-            milvus_stats = client.get_collection_stats(self.collection_name)
-            milvus_count = milvus_stats.get("row_count", 0)
+            indexed_rows = self._get_indexed_skill_rows()
+            milvus_count = len(indexed_rows)
+            indexed_paths = {row.get("path") for row in indexed_rows if row.get("path")}
+            current_paths = self._workspace_skill_paths()
             
-            logger.debug("Skill count - Filesystem: {}, Milvus: {}", fs_skill_count, milvus_count)
+            logger.debug("Skill count - Filesystem: {}, Milvus(query): {}", fs_skill_count, milvus_count)
             
-            # If counts differ, rebuild index
-            if fs_skill_count != milvus_count:
+            if fs_skill_count != milvus_count or indexed_paths != current_paths:
                 logger.info(
-                    "Skill count mismatch detected (fs: {}, milvus: {}), rebuilding index...",
+                    "Skill index mismatch detected (fs_count={}, milvus_count={}), rebuilding index...",
                     fs_skill_count, milvus_count
                 )
                 self.build_index(force_rebuild=True)
@@ -669,12 +720,11 @@ class SkillRetriever:
                 return True
             
             fs_skill_count = self._count_skill_dirs()
-            
-            # Count skills in Milvus
-            milvus_stats = client.get_collection_stats(self.collection_name)
-            milvus_count = milvus_stats.get("row_count", 0)
-            
-            return fs_skill_count != milvus_count
+            indexed_rows = self._get_indexed_skill_rows()
+            milvus_count = len(indexed_rows)
+            indexed_paths = {row.get("path") for row in indexed_rows if row.get("path")}
+
+            return fs_skill_count != milvus_count or indexed_paths != self._workspace_skill_paths()
             
         except Exception as e:
             logger.warning("Failed to check if rebuild needed: {}", e)

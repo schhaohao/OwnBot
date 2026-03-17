@@ -23,6 +23,11 @@ class ContextBuilder:
     """
 
     _RUNTIME_CONTEXT_TAG = "[runtime-context]"
+    _SMALL_TALK_PATTERNS = (
+        r"^(hi|hello|hey|yo)\b",
+        r"^(你好|您好|嗨|哈喽|在吗|早上好|中午好|晚上好)$",
+        r"^(thanks|thank you|谢谢|多谢|收到|好的|ok|okay|嗯|嗯嗯)$",
+    )
 
     def __init__(
         self,
@@ -100,6 +105,8 @@ class ContextBuilder:
                 logger.info("Pre-building skill index on startup...")
                 count = self.skill_retriever.build_index()
                 logger.info("Successfully pre-built index with {} skills", count)
+                if count > 0:
+                    self.skill_retriever.warm_up_query_embedding()
             except Exception as e:
                 logger.warning("Failed to pre-build index on startup: {}", e)
                 logger.warning("Index will be built on first search")
@@ -127,7 +134,7 @@ class ContextBuilder:
         """
         messages: List[dict[str, Any]] = []
 
-        # ReAct System prompt
+        # Native tool-calling System prompt
         system_prompt = self._build_system_prompt(current_message)
         logger.info("Final system prompt:\n{}", system_prompt.strip())
         messages.append({"role": "system", "content": system_prompt.strip()})
@@ -208,7 +215,7 @@ class ContextBuilder:
         return result
 
     def _extract_thought(self, content: str) -> Optional[str]:
-        """Extract the Thought section, falling back to a short preview."""
+        """Extract the explicit Thought section from a legacy ReAct response."""
         normalized = content.strip()
         if not normalized:
             return None
@@ -223,10 +230,6 @@ class ContextBuilder:
                 thought = match.group(1).strip()
                 if thought:
                     return thought
-
-        if all(marker not in normalized for marker in ("Thought:", "Action:", "Final Answer:")):
-            first_line = normalized.splitlines()[0].strip()
-            return first_line or None
 
         return None
 
@@ -281,52 +284,29 @@ class ContextBuilder:
     
     def _build_system_prompt(self, current_message: str) -> str:
         """
-        Build the system prompt with progressive skill disclosure.
+        Build the system prompt with built-in skills plus progressive workspace retrieval.
         
         Strategy:
         1. Built-in skills are always listed in the system prompt
         2. Workspace skills are retrieved via RAG and shown on demand
-        3. Agent loads full skill content with read_file tool
+        3. Agent uses native tool calling when tools are needed
         """
-        # Base ReAct instructions
-        base_prompt = """You are OwnBot, a helpful AI assistant using ReAct (Reasoning + Acting) architecture.
+        base_prompt = """You are OwnBot, a helpful AI assistant.
 
-Your goal is to provide accurate and useful responses to user queries by thinking step by step.
+Your job is to answer the user's request accurately, using tools only when they are actually needed.
 
-IMPORTANT: You must ALWAYS use the following exact format for your responses:
-
-Thought: [Your thinking process here]
-
-Then either:
-1. If you need to use a tool:
-   Action: [tool_name]
-   Action Input: [JSON parameters]
-
-2. If you have the final answer:
-   Final Answer: [Your response to the user]
-
-Rules:
-- ALWAYS start with "Thought:"
-- When giving final answer, ALWAYS use "Final Answer:" prefix
-- Never output both Action and Final Answer in the same response
-- Be concise and helpful in your Final Answer
-- Do not include the thought process in the Final Answer
-
-Example 1 (using tool):
-Thought: The user wants to know the weather in Tokyo. I need to use the web_request tool to get this information.
-Action: web_request
-Action Input: {"url": "https://api.weather.com/tokyo", "method": "GET"}
-
-Example 2 (final answer):
-Thought: I have successfully retrieved the weather information for Tokyo.
-Final Answer: The weather in Tokyo is 22°C and sunny today.
-
-Guidelines:
-- Always think before acting
-- Be concise in your thoughts
-- Only use tools when necessary
-- If you're unsure, ask for clarification
-- Respect user privacy
+Response rules:
+- If you can answer directly, reply with a normal assistant message.
+- If you need a tool, use the model's native tool calling. Do not write `Thought:`, `Action:`, or `Action Input:` in normal responses.
+- Keep internal reasoning private. Do not expose chain-of-thought.
+- For greetings, acknowledgements, and casual small talk, answer directly and do not read any skill file.
+- Do not use a skill unless it is relevant to the user's request.
+- When you use a skill, copy the exact `doc_path` shown below. Never invent or rewrite a skill path from the skill name.
+- Built-in skills and workspace skills are different sources. Never assume a built-in skill also exists in workspace, and never assume a workspace skill also exists as a built-in skill.
+- Only the skills listed under `Workspace Skills` exist in `~/.ownbot/workspace/skills/`.
+- If a skill appears in both sections, use the exact path from the section you intentionally chose.
+- Prefer answering from your existing knowledge for trivial conversation instead of opening a skill document.
+- If you are unsure which skill source to use, prefer the exact built-in path unless a workspace skill is explicitly listed for this query.
 """
 
         builtin_prompt = self._build_builtin_skills_prompt()
@@ -349,14 +329,17 @@ Guidelines:
                 return ""
 
             lines = ["## Built-in Skills\n"]
-            lines.append("These built-in skills are always available and do not use vector retrieval:\n")
+            lines.append("These built-in skills are always available and do not use vector retrieval.\n")
+            lines.append("Use them only when relevant, and copy the exact `doc_path`.\n")
 
             for skill in skills:
                 emoji = skill.metadata.emoji if skill.metadata else "🔧"
                 skill_doc_path = skill.path if skill.path else (self.builtin_skills_dir / skill.name / "SKILL.md")
-                lines.append(f"{emoji} **{skill.name}**: {skill.description} (doc path: {skill_doc_path})")
+                lines.append(
+                    f"- source=builtin | name={skill.name} | emoji={emoji} | doc_path={skill_doc_path} | description={skill.description}"
+                )
 
-            lines.append("\nIf you need a built-in skill, read the exact doc path shown above with the `read_file` tool.")
+            lines.append("\nImportant: built-in skills do not live under `~/.ownbot/workspace/skills/` unless a matching workspace skill is separately listed below.")
             return "\n".join(lines)
         except Exception as e:
             logger.warning("Failed to build built-in skills prompt: {}", e)
@@ -370,6 +353,9 @@ Guidelines:
         The agent must use read_file to load full skill content.
         """
         if not self.enable_rag or self.skill_retriever is None:
+            return ""
+        if self._is_small_talk_or_greeting(current_message):
+            logger.info("Skipping workspace skill retrieval for small-talk query: {}", current_message)
             return ""
         
         try:
@@ -392,27 +378,35 @@ Guidelines:
             
             lines = ["## Workspace Skills\n"]
             lines.append(
-                f"Based on your query, here are {len(relevant_skills)} relevant user-installed skills from ~/.ownbot/workspace/skills:\n"
+                f"Based on your query, here are {len(relevant_skills)} relevant user-installed skills from ~/.ownbot/workspace/skills.\n"
             )
+            lines.append("Only these listed skills may be read from workspace for this query.\n")
             
             for skill in relevant_skills:
                 emoji = skill.metadata.get("emoji", "🔧")
                 skill_doc_path = Path(skill.path) / "SKILL.md"
-                lines.append(f"{emoji} **{skill.name}**: {skill.description} (doc path: {skill_doc_path})")
+                lines.append(
+                    f"- source=workspace | name={skill.name} | emoji={emoji} | doc_path={skill_doc_path} | description={skill.description}"
+                )
             
             lines.append("\n### How to Use Workspace Skills")
-            lines.append("1. Choose the most relevant skill from the list above")
-            lines.append("2. Read its full documentation using the exact doc path shown above with the `read_file` tool:")
-            lines.append(f"   Action: read_file")
-            lines.append(f"   Action Input: {{\"path\": \"/Users/example/.ownbot/workspace/skills/<skill_name>/SKILL.md\"}}")
-            lines.append("3. Follow the instructions in the SKILL.md file")
-            lines.append("4. Use appropriate tools to complete the task")
+            lines.append("1. Choose a skill only if it is relevant to the user's request.")
+            lines.append("2. Read its full documentation only by copying the exact `doc_path` shown above with `read_file`.")
+            lines.append("3. Never construct a workspace path from a skill name that is not listed in this section.")
             
             return "\n".join(lines)
             
         except Exception as e:
             logger.warning("Failed to build workspace skills prompt: {}", e)
             return ""
+
+    @classmethod
+    def _is_small_talk_or_greeting(cls, message: str) -> bool:
+        """Heuristic to avoid retrieving skills for casual greetings."""
+        text = (message or "").strip().lower()
+        if not text:
+            return True
+        return any(re.match(pattern, text, re.IGNORECASE) for pattern in cls._SMALL_TALK_PATTERNS)
     
     def build_index(self, force_rebuild: bool = False) -> int:
         """

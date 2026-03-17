@@ -44,6 +44,7 @@ class LLMConfig(Base):
     model: str = "gpt-4.1-mini"
     temperature: float = 0.1
     max_tokens: int = 8192
+    reasoning_effort: str | None = None
 
 
 class RetrievalConfig(Base):

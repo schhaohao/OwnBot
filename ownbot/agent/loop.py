@@ -58,7 +58,11 @@ class AgentLoop:
         self.provider.generation = GenerationSettings(
             temperature=cfg.llm.temperature,
             max_tokens=cfg.llm.max_tokens,
-            reasoning_effort=None
+            reasoning_effort=cfg.llm.reasoning_effort,
+        )
+        logger.info(
+            "LLM reasoning configuration: {}",
+            cfg.llm.reasoning_effort or "disabled",
         )
         self.model = cfg.llm.model
         self.workspace = cfg.workspace_path
@@ -133,6 +137,15 @@ class AgentLoop:
         return re.sub(r"<think>[\s\S]*?</think>", "", text).strip() or None
 
     @staticmethod
+    def _extract_think(text: str | None) -> str | None:
+        """Extract <think>…</think> blocks for developer-only reasoning logs."""
+        if not text:
+            return None
+        matches = re.findall(r"<think>([\s\S]*?)</think>", text)
+        parts = [match.strip() for match in matches if match.strip()]
+        return "\n\n".join(parts) if parts else None
+
+    @staticmethod
     def _dump_for_log(data: Any) -> str:
         """Serialize request payloads for readable logging."""
         try:
@@ -162,7 +175,7 @@ class AgentLoop:
         on_progress: Callable[..., asyncio.coroutine] | None = None,
         agent_logger: Optional[Any] = None,
     ) -> tuple[str | None, list[str], list[dict]]:
-        """Run the agent iteration loop with ReAct architecture."""
+        """Run the agent iteration loop with native tool-calling as the primary path."""
         messages = initial_messages
         iteration = 0
         final_content = None
@@ -187,47 +200,51 @@ class AgentLoop:
                 model=self.model,
             )
 
-            # Check for tool calls (OpenAI format) or ReAct format
+            reasoning_text = response.reasoning_content or self._extract_think(response.content)
+            if agent_logger and reasoning_text:
+                agent_logger.log_reasoning(reasoning_text)
+
             clean_content = self._strip_think(response.content) or ""
-            react_result = self.context.parse_react_response(clean_content)
-            
-            # Debug: Log the raw content to understand the format
             logger.debug("Raw LLM response: {}", response.content[:500] if response.content else "None")
             logger.debug("Clean content: {}", clean_content[:500] if clean_content else "None")
-            logger.debug("Parsed react_result: {}", react_result)
-            
-            # Check if this is a ReAct format with Action (but no OpenAI tool_calls)
-            has_react_action = react_result.get('action') and react_result.get('action_input')
-            
-            if response.has_tool_calls or has_react_action:
-                # Log thought to console (developer only, not to user)
-                if agent_logger:
-                    if react_result.get('thought'):
-                        agent_logger.log_thought(react_result['thought'])
-                    else:
-                        # If no thought parsed, log the raw content for debugging
-                        logger.warning("No thought parsed from response. Raw content preview: {}", 
-                                     clean_content[:200] if clean_content else "Empty")
 
-                # Handle ReAct format (convert to tool_calls)
-                if has_react_action and not response.has_tool_calls:
+            react_result = None
+            if not response.has_tool_calls:
+                react_result = self.context.parse_react_response(clean_content)
+                logger.debug("Parsed react_result: {}", react_result)
+
+                has_react_action = react_result.get('action') and react_result.get('action_input')
+                if has_react_action:
                     from ownbot.providers.base import ToolCallRequest
+
                     try:
                         action_input = json.loads(react_result['action_input'])
                     except json.JSONDecodeError:
                         action_input = {"text": react_result['action_input']}
-                    
-                    react_tool_call = ToolCallRequest(
-                        id=f"react_{iteration}",
-                        name=react_result['action'],
-                        arguments=action_input
-                    )
-                    # Create a new response with the parsed tool call
-                    response.tool_calls = [react_tool_call]
-                    logger.info("Parsed ReAct action: {}({})", react_result['action'], react_result['action_input'])
 
-                # Note: We no longer send thought to user via on_progress
-                # Only log it to console for debugging
+                    response.tool_calls = [
+                        ToolCallRequest(
+                            id=f"react_{iteration}",
+                            name=react_result['action'],
+                            arguments=action_input,
+                        )
+                    ]
+                    logger.info(
+                        "Parsed legacy ReAct action from text response: {}({})",
+                        react_result['action'],
+                        react_result['action_input'],
+                    )
+
+            if response.has_tool_calls:
+                if agent_logger:
+                    if clean_content:
+                        agent_logger.log_thought(clean_content)
+                    else:
+                        tool_names = ", ".join(tc.name for tc in response.tool_calls)
+                        logger.info(
+                            "Model returned native tool calls without textual content: {}",
+                            tool_names or "none",
+                        )
 
                 tool_call_dicts = [
                     tc.to_openai_tool_call()
@@ -285,12 +302,8 @@ class AgentLoop:
                     continue  # Retry instead of breaking
                 
                 # Parse ReAct response to extract final answer
-                react_result = self.context.parse_react_response(clean)
-                
-                # Log thought to console (developer only, not to user)
-                if agent_logger and react_result.get('thought'):
-                    agent_logger.log_thought(react_result['thought'])
-                
+                react_result = react_result or self.context.parse_react_response(clean)
+
                 # If there's a final answer, use it; otherwise use the full content
                 if react_result.get('final_answer'):
                     final_content = react_result['final_answer']

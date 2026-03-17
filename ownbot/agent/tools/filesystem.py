@@ -32,10 +32,30 @@ class ListFilesTool(Tool):
             if self.skills_dir is not None and raw_path.startswith("/skills/"):
                 relative = raw_path.removeprefix("/skills/").strip("/")
                 return (self.skills_dir / relative).resolve()
+            fallback = self._maybe_resolve_builtin_skill_fallback(path)
+            if fallback is not None:
+                return fallback
             return path
         if raw_path.startswith("ownbot/skills/") and self.repo_root is not None:
             return (self.repo_root / raw_path).resolve()
         return (self.workspace / path).resolve()
+
+    def _maybe_resolve_builtin_skill_fallback(self, path: Path) -> Path | None:
+        if self.skills_dir is None or self.builtin_skills_dir is None:
+            return None
+        if path.exists() or path.name != "SKILL.md":
+            return None
+        try:
+            path.relative_to(self.skills_dir)
+        except ValueError:
+            return None
+
+        skill_name = path.parent.name
+        builtin_path = (self.builtin_skills_dir / skill_name / "SKILL.md").resolve()
+        if builtin_path.exists():
+            logger.warning("Workspace skill path {} missing; falling back to built-in skill {}", path, builtin_path)
+            return builtin_path
+        return None
 
     async def execute(self, arguments: dict[str, Any]) -> str:
         raw_path = arguments.get("path", ".")
@@ -79,10 +99,30 @@ class ReadFileTool(Tool):
             if self.skills_dir is not None and raw_path.startswith("/skills/"):
                 relative = raw_path.removeprefix("/skills/").strip("/")
                 return (self.skills_dir / relative).resolve()
+            fallback = self._maybe_resolve_builtin_skill_fallback(path)
+            if fallback is not None:
+                return fallback
             return path
         if raw_path.startswith("ownbot/skills/") and self.repo_root is not None:
             return (self.repo_root / raw_path).resolve()
         return (self.workspace / path).resolve()
+
+    def _maybe_resolve_builtin_skill_fallback(self, path: Path) -> Path | None:
+        if self.skills_dir is None or self.builtin_skills_dir is None:
+            return None
+        if path.exists() or path.name != "SKILL.md":
+            return None
+        try:
+            path.relative_to(self.skills_dir)
+        except ValueError:
+            return None
+
+        skill_name = path.parent.name
+        builtin_path = (self.builtin_skills_dir / skill_name / "SKILL.md").resolve()
+        if builtin_path.exists():
+            logger.warning("Workspace skill path {} missing; falling back to built-in skill {}", path, builtin_path)
+            return builtin_path
+        return None
 
     async def execute(self, arguments: dict[str, Any]) -> str:
         raw_path = arguments.get("path")
@@ -130,10 +170,30 @@ class WriteFileTool(Tool):
             if self.skills_dir is not None and raw_path.startswith("/skills/"):
                 relative = raw_path.removeprefix("/skills/").strip("/")
                 return (self.skills_dir / relative).resolve()
+            fallback = self._maybe_resolve_builtin_skill_fallback(path)
+            if fallback is not None:
+                return fallback
             return path
         if raw_path.startswith("ownbot/skills/") and self.repo_root is not None:
             return (self.repo_root / raw_path).resolve()
         return (self.workspace / path).resolve()
+
+    def _maybe_resolve_builtin_skill_fallback(self, path: Path) -> Path | None:
+        if self.skills_dir is None or self.builtin_skills_dir is None:
+            return None
+        if path.exists() or path.name != "SKILL.md":
+            return None
+        try:
+            path.relative_to(self.skills_dir)
+        except ValueError:
+            return None
+
+        skill_name = path.parent.name
+        builtin_path = (self.builtin_skills_dir / skill_name / "SKILL.md").resolve()
+        if builtin_path.exists():
+            logger.warning("Workspace skill path {} missing; falling back to built-in skill {}", path, builtin_path)
+            return builtin_path
+        return None
 
     async def execute(self, arguments: dict[str, Any]) -> str:
         raw_path = arguments.get("path")

@@ -5,6 +5,6 @@ Each skill is defined in a SKILL.md file with YAML frontmatter.
 """
 
 from ownbot.skills.loader import SkillLoader
-from ownbot.skills.models import Skill, SkillMetadata
+from ownbot.skills.models import Skill, SkillMetadata, SkillSummary
 
-__all__ = ["SkillLoader", "Skill", "SkillMetadata"]
+__all__ = ["SkillLoader", "Skill", "SkillMetadata", "SkillSummary"]

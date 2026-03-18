@@ -63,3 +63,13 @@ class Skill:
                 },
             },
         }
+
+
+@dataclass
+class SkillSummary:
+    """A lightweight skill summary used for progressive disclosure."""
+
+    name: str
+    description: str
+    metadata: SkillMetadata
+    path: Path | None = None

@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 from loguru import logger
 
-from ownbot.skills.models import Skill, SkillMetadata
+from ownbot.skills.models import Skill, SkillMetadata, SkillSummary
 
 
 class SkillLoader:
@@ -32,6 +32,34 @@ class SkillLoader:
             skills_dir = Path(__file__).parent
         self.skills_dir = skills_dir
         self._skills: dict[str, Skill] = {}
+        self._skill_summaries: dict[str, SkillSummary] = {}
+
+    @staticmethod
+    def _normalize_metadata(metadata_dict: Any) -> SkillMetadata:
+        """Normalize metadata from YAML frontmatter."""
+        if not isinstance(metadata_dict, dict):
+            metadata_dict = {}
+        if "ownbot" in metadata_dict and isinstance(metadata_dict["ownbot"], dict):
+            metadata_dict = metadata_dict["ownbot"]
+        return SkillMetadata.from_dict(metadata_dict)
+
+    def _parse_frontmatter(self, content: str) -> tuple[dict[str, Any], str] | None:
+        """Parse YAML frontmatter and markdown body from a skill document."""
+        match = self.FRONTMATTER_PATTERN.match(content.strip())
+
+        if not match:
+            logger.warning("Invalid skill format: missing YAML frontmatter")
+            return None
+
+        yaml_content, markdown_content = match.groups()
+
+        try:
+            frontmatter = yaml.safe_load(yaml_content) or {}
+        except yaml.YAMLError as e:
+            logger.error("Failed to parse YAML frontmatter: {}", e)
+            return None
+
+        return frontmatter, markdown_content.strip()
     
     def load_skill(self, skill_path: Path) -> Skill | None:
         """Load a single skill from a directory or file.
@@ -68,34 +96,22 @@ class SkillLoader:
         Returns:
             Parsed Skill or None if parsing failed.
         """
-        match = self.FRONTMATTER_PATTERN.match(content.strip())
-        
-        if not match:
-            logger.warning("Invalid skill format: missing YAML frontmatter")
+        parsed = self._parse_frontmatter(content)
+        if parsed is None:
             return None
-        
-        yaml_content, markdown_content = match.groups()
-        
-        try:
-            frontmatter = yaml.safe_load(yaml_content) or {}
-        except yaml.YAMLError as e:
-            logger.error("Failed to parse YAML frontmatter: {}", e)
-            return None
-        
+
+        frontmatter, markdown_content = parsed
+
         # Extract required fields
         name = frontmatter.get("name")
         description = frontmatter.get("description", "")
-        
+
         if not name:
             logger.warning("Skill missing required 'name' field")
             return None
-        
-        # Parse metadata
-        metadata_dict = frontmatter.get("metadata", {})
-        if "ownbot" in metadata_dict:
-            metadata_dict = metadata_dict["ownbot"]
-        metadata = SkillMetadata.from_dict(metadata_dict)
-        
+
+        metadata = self._normalize_metadata(frontmatter.get("metadata", {}))
+
         return Skill(
             name=name,
             description=description,
@@ -103,6 +119,41 @@ class SkillLoader:
             metadata=metadata,
             path=path,
         )
+
+    def load_skill_summary(self, skill_path: Path) -> SkillSummary | None:
+        """Load only skill metadata for progressive disclosure."""
+        if skill_path.is_dir():
+            skill_file = skill_path / "SKILL.md"
+        else:
+            skill_file = skill_path
+
+        if not skill_file.exists():
+            logger.warning("Skill file not found: {}", skill_file)
+            return None
+
+        try:
+            content = skill_file.read_text(encoding="utf-8")
+            parsed = self._parse_frontmatter(content)
+            if parsed is None:
+                return None
+
+            frontmatter, _ = parsed
+            name = frontmatter.get("name")
+            description = frontmatter.get("description", "")
+
+            if not name:
+                logger.warning("Skill missing required 'name' field")
+                return None
+
+            return SkillSummary(
+                name=name,
+                description=description,
+                metadata=self._normalize_metadata(frontmatter.get("metadata", {})),
+                path=skill_file,
+            )
+        except Exception as e:
+            logger.error("Failed to load skill summary from {}: {}", skill_file, e)
+            return None
     
     def load_all_skills(self) -> dict[str, Skill]:
         """Load all skills from the skills directory.
@@ -124,6 +175,27 @@ class SkillLoader:
                     logger.info("Loaded skill: {} {}", skill.name, skill.metadata.emoji)
         
         return self._skills
+
+    def load_all_skill_summaries(self) -> dict[str, SkillSummary]:
+        """Load lightweight metadata summaries for all skills in the directory."""
+        self._skill_summaries = {}
+
+        if not self.skills_dir.exists():
+            logger.warning("Skills directory not found: {}", self.skills_dir)
+            return self._skill_summaries
+
+        for item in self.skills_dir.iterdir():
+            if item.is_dir() and not item.name.startswith("_"):
+                skill_summary = self.load_skill_summary(item)
+                if skill_summary:
+                    self._skill_summaries[skill_summary.name] = skill_summary
+                    logger.info(
+                        "Loaded skill summary: {} {}",
+                        skill_summary.name,
+                        skill_summary.metadata.emoji,
+                    )
+
+        return self._skill_summaries
     
     def get_skill(self, name: str) -> Skill | None:
         """Get a loaded skill by name.
@@ -143,6 +215,10 @@ class SkillLoader:
             List of Skill objects.
         """
         return list(self._skills.values())
+
+    def list_skill_summaries(self) -> list[SkillSummary]:
+        """List loaded skill summaries."""
+        return list(self._skill_summaries.values())
     
     def get_system_prompt_additions(self) -> str:
         """Get system prompt additions for all loaded skills.

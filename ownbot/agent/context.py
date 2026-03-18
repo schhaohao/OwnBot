@@ -7,7 +7,7 @@ from typing import Any, List, Optional
 from loguru import logger
 
 from ownbot.retrieval import SkillRetriever
-from ownbot.skills import SkillLoader
+from ownbot.skills import SkillLoader, SkillSummary
 
 
 class ContextBuilder:
@@ -17,9 +17,9 @@ class ContextBuilder:
     Implements ReAct (Reasoning + Acting) architecture for better complex task handling.
     
     Skill Loading Strategy (Progressive Disclosure):
-    1. RAG Retrieval: Search for top 50 relevant skills by query
-    2. Summary Loading: Load only skill names and descriptions (not full content)
-    3. On-Demand Loading: Agent uses read_file tool to load full SKILL.md when needed
+    1. Load all built-in and workspace skill metadata on startup
+    2. Expose only metadata in the system prompt
+    3. Let the agent read full SKILL.md files on demand via read_file
     """
 
     _RUNTIME_CONTEXT_TAG = "[runtime-context]"
@@ -71,17 +71,13 @@ class ContextBuilder:
 
         self.builtin_skill_loader = SkillLoader(self.builtin_skills_dir)
         self.workspace_skill_loader = SkillLoader(self.workspace_skills_dir)
-        try:
-            self.builtin_skill_loader.load_all_skills()
-            logger.info(
-                "Loaded {} built-in skill(s) from {}",
-                len(self.builtin_skill_loader.list_skills()),
-                self.builtin_skills_dir,
-            )
-        except Exception as e:
-            logger.warning("Failed to load built-in skills from {}: {}", self.builtin_skills_dir, e)
-        
-        # RAG retriever (for initial skill discovery)
+        self.builtin_skill_summaries: list[SkillSummary] = []
+        self.workspace_skill_summaries: list[SkillSummary] = []
+        self._builtin_skill_catalog_fingerprint: tuple[tuple[Any, ...], ...] = ()
+        self._workspace_skill_catalog_fingerprint: tuple[tuple[Any, ...], ...] = ()
+        self._load_skill_catalogs()
+
+        # Keep the vector retriever available for explicit indexing/search flows.
         self.enable_rag = enable_rag
         self.skill_retriever: Optional[SkillRetriever] = None
         if enable_rag:
@@ -95,21 +91,9 @@ class ContextBuilder:
                     embedding_model=embedding_model,
                 )
             except Exception as e:
-                # Fall back to traditional loading if RAG fails
+                logger.warning("Failed to initialize skill retriever: {}", e)
                 self.enable_rag = False
                 self.skill_retriever = None
-        
-        # Pre-build index on startup if RAG is enabled
-        if self.enable_rag and self.skill_retriever:
-            try:
-                logger.info("Pre-building skill index on startup...")
-                count = self.skill_retriever.build_index()
-                logger.info("Successfully pre-built index with {} skills", count)
-                if count > 0:
-                    self.skill_retriever.warm_up_query_embedding()
-            except Exception as e:
-                logger.warning("Failed to pre-build index on startup: {}", e)
-                logger.warning("Index will be built on first search")
     
     def build_messages(
         self,
@@ -133,6 +117,7 @@ class ContextBuilder:
             A list of message dicts for the LLM.
         """
         messages: List[dict[str, Any]] = []
+        self._refresh_skill_catalogs_if_needed()
 
         # Native tool-calling System prompt
         system_prompt = self._build_system_prompt(current_message)
@@ -284,12 +269,7 @@ class ContextBuilder:
     
     def _build_system_prompt(self, current_message: str) -> str:
         """
-        Build the system prompt with built-in skills plus progressive workspace retrieval.
-        
-        Strategy:
-        1. Built-in skills are always listed in the system prompt
-        2. Workspace skills are retrieved via RAG and shown on demand
-        3. Agent uses native tool calling when tools are needed
+        Build the system prompt with metadata-only skill catalogs.
         """
         base_prompt = """You are OwnBot, a helpful AI assistant.
 
@@ -301,104 +281,130 @@ Response rules:
 - Keep internal reasoning private. Do not expose chain-of-thought.
 - For greetings, acknowledgements, and casual small talk, answer directly and do not read any skill file.
 - Do not use a skill unless it is relevant to the user's request.
+- Skills are progressively disclosed: only metadata is loaded into the prompt. Read the full `SKILL.md` with `read_file` only after you decide a skill is relevant.
 - When you use a skill, copy the exact `doc_path` shown below. Never invent or rewrite a skill path from the skill name.
-- Built-in skills and workspace skills are different sources. Never assume a built-in skill also exists in workspace, and never assume a workspace skill also exists as a built-in skill.
-- Only the skills listed under `Workspace Skills` exist in `~/.ownbot/workspace/skills/`.
+- Built-in skills and workspace skills are different sources with different paths. Never assume a built-in skill also exists in workspace, and never assume a workspace skill also exists as a built-in skill.
 - If a skill appears in both sections, use the exact path from the section you intentionally chose.
 - Prefer answering from your existing knowledge for trivial conversation instead of opening a skill document.
-- If you are unsure which skill source to use, prefer the exact built-in path unless a workspace skill is explicitly listed for this query.
+- If you are unsure which skill source to use, prefer the exact built-in path unless the user is clearly asking for a workspace-installed skill.
 """
 
-        builtin_prompt = self._build_builtin_skills_prompt()
-        if builtin_prompt:
-            base_prompt += "\n\n" + builtin_prompt
-
-        workspace_prompt = self._build_workspace_skills_prompt(current_message)
-        if workspace_prompt:
-            base_prompt += "\n\n" + workspace_prompt
+        skills_prompt = self._build_skill_catalog_prompt()
+        if skills_prompt:
+            base_prompt += "\n\n" + skills_prompt
         
         return base_prompt
-    
-    def _build_builtin_skills_prompt(self) -> str:
-        """Build the built-in skills section of the system prompt."""
+
+    def _load_skill_catalogs(self) -> None:
+        """Load metadata-only skill catalogs for built-in and workspace skills."""
         try:
-            self.builtin_skill_loader.load_all_skills()
-            skills = self.builtin_skill_loader.list_skills()
-
-            if not skills:
-                return ""
-
-            lines = ["## Built-in Skills\n"]
-            lines.append("These built-in skills are always available and do not use vector retrieval.\n")
-            lines.append("Use them only when relevant, and copy the exact `doc_path`.\n")
-
-            for skill in skills:
-                emoji = skill.metadata.emoji if skill.metadata else "🔧"
-                skill_doc_path = skill.path if skill.path else (self.builtin_skills_dir / skill.name / "SKILL.md")
-                lines.append(
-                    f"- source=builtin | name={skill.name} | emoji={emoji} | doc_path={skill_doc_path} | description={skill.description}"
-                )
-
-            lines.append("\nImportant: built-in skills do not live under `~/.ownbot/workspace/skills/` unless a matching workspace skill is separately listed below.")
-            return "\n".join(lines)
-        except Exception as e:
-            logger.warning("Failed to build built-in skills prompt: {}", e)
-            return ""
-
-    def _build_workspace_skills_prompt(self, current_message: str) -> str:
-        """
-        Build the workspace skills section of the system prompt.
-        
-        Uses RAG to find relevant user-installed skills, then shows only summaries.
-        The agent must use read_file to load full skill content.
-        """
-        if not self.enable_rag or self.skill_retriever is None:
-            return ""
-        if self._is_small_talk_or_greeting(current_message):
-            logger.info("Skipping workspace skill retrieval for small-talk query: {}", current_message)
-            return ""
-        
-        try:
-            relevant_skills = self.skill_retriever.search(current_message, top_k=50)
-            logger.info("Skill retrieval query: {}", current_message)
-            
-            if not relevant_skills:
-                logger.info("Workspace skill retrieval returned no matches")
-                return ""
-
-            log_preview = [
-                f"{skill.name} score={skill.score:.4f} path={skill.path}"
-                for skill in relevant_skills[:10]
-            ]
+            self.builtin_skill_loader.load_all_skill_summaries()
+            self.builtin_skill_summaries = sorted(
+                self.builtin_skill_loader.list_skill_summaries(),
+                key=lambda skill: skill.name.lower(),
+            )
             logger.info(
-                "Skill retrieval results (top {}): {}",
-                min(len(log_preview), len(relevant_skills)),
-                " | ".join(log_preview),
+                "Loaded {} built-in skill summary/summaries from {}",
+                len(self.builtin_skill_summaries),
+                self.builtin_skills_dir,
             )
-            
-            lines = ["## Workspace Skills\n"]
-            lines.append(
-                f"Based on your query, here are {len(relevant_skills)} relevant user-installed skills from ~/.ownbot/workspace/skills.\n"
-            )
-            lines.append("Only these listed skills may be read from workspace for this query.\n")
-            
-            for skill in relevant_skills:
-                emoji = skill.metadata.get("emoji", "🔧")
-                skill_doc_path = Path(skill.path) / "SKILL.md"
-                lines.append(
-                    f"- source=workspace | name={skill.name} | emoji={emoji} | doc_path={skill_doc_path} | description={skill.description}"
-                )
-            
-            lines.append("\n### How to Use Workspace Skills")
-            lines.append("1. Choose a skill only if it is relevant to the user's request.")
-            lines.append("2. Read its full documentation only by copying the exact `doc_path` shown above with `read_file`.")
-            lines.append("3. Never construct a workspace path from a skill name that is not listed in this section.")
-            
-            return "\n".join(lines)
-            
         except Exception as e:
-            logger.warning("Failed to build workspace skills prompt: {}", e)
+            logger.warning("Failed to load built-in skill summaries from {}: {}", self.builtin_skills_dir, e)
+            self.builtin_skill_summaries = []
+
+        try:
+            self.workspace_skill_loader.load_all_skill_summaries()
+            self.workspace_skill_summaries = sorted(
+                self.workspace_skill_loader.list_skill_summaries(),
+                key=lambda skill: skill.name.lower(),
+            )
+            logger.info(
+                "Loaded {} workspace skill summary/summaries from {}",
+                len(self.workspace_skill_summaries),
+                self.workspace_skills_dir,
+            )
+        except Exception as e:
+            logger.warning("Failed to load workspace skill summaries from {}: {}", self.workspace_skills_dir, e)
+            self.workspace_skill_summaries = []
+
+        self._builtin_skill_catalog_fingerprint = self._compute_skill_catalog_fingerprint(self.builtin_skills_dir)
+        self._workspace_skill_catalog_fingerprint = self._compute_skill_catalog_fingerprint(self.workspace_skills_dir)
+
+    def _refresh_skill_catalogs_if_needed(self) -> None:
+        """Refresh skill catalogs only when the skill directories have changed."""
+        builtin_fingerprint = self._compute_skill_catalog_fingerprint(self.builtin_skills_dir)
+        workspace_fingerprint = self._compute_skill_catalog_fingerprint(self.workspace_skills_dir)
+
+        if (
+            builtin_fingerprint == self._builtin_skill_catalog_fingerprint
+            and workspace_fingerprint == self._workspace_skill_catalog_fingerprint
+        ):
+            return
+
+        logger.info(
+            "Skill catalog change detected; refreshing summaries (builtin_changed={}, workspace_changed={})",
+            builtin_fingerprint != self._builtin_skill_catalog_fingerprint,
+            workspace_fingerprint != self._workspace_skill_catalog_fingerprint,
+        )
+        self._load_skill_catalogs()
+
+    @staticmethod
+    def _compute_skill_catalog_fingerprint(skills_dir: Path) -> tuple[tuple[Any, ...], ...]:
+        """Return a lightweight fingerprint for a skills directory."""
+        if not skills_dir.exists():
+            return ()
+
+        fingerprint: list[tuple[Any, ...]] = []
+        for item in sorted(skills_dir.iterdir(), key=lambda path: path.name.lower()):
+            if not item.is_dir() or item.name.startswith("_"):
+                continue
+
+            skill_file = item / "SKILL.md"
+            if skill_file.exists():
+                stat = skill_file.stat()
+                fingerprint.append((item.name, True, stat.st_mtime_ns, stat.st_size))
+            else:
+                fingerprint.append((item.name, False))
+
+        return tuple(fingerprint)
+
+    def _build_skill_catalog_prompt(self) -> str:
+        """Build the metadata-only skill catalog for the system prompt."""
+        if not self.builtin_skill_summaries and not self.workspace_skill_summaries:
             return ""
+
+        lines = ["## Skill Catalog\n"]
+        lines.append("The entries below are metadata only. Read the full `SKILL.md` only when a skill is relevant.\n")
+
+        lines.append("### Built-in Skills\n")
+        if self.builtin_skill_summaries:
+            lines.append("These skills ship with OwnBot. Their files live in the repository, not in the workspace.\n")
+            lines.extend(self._format_skill_summary_lines(self.builtin_skill_summaries, source="builtin"))
+        else:
+            lines.append("No built-in skills found.\n")
+
+        lines.append("\n### Workspace Skills\n")
+        if self.workspace_skill_summaries:
+            lines.append("These skills are user-installed under `~/.ownbot/workspace/skills/`. Use the exact `doc_path` shown below.\n")
+            lines.extend(self._format_skill_summary_lines(self.workspace_skill_summaries, source="workspace"))
+        else:
+            lines.append("No workspace skills installed.\n")
+
+        lines.append("\nChoose skills yourself based on relevance; there is no query-time vector filtering in this prompt.")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_skill_summary_lines(skills: list[SkillSummary], source: str) -> list[str]:
+        """Format skill summaries for prompt inclusion."""
+        lines: list[str] = []
+        for skill in skills:
+            emoji = skill.metadata.emoji if skill.metadata else "🔧"
+            if skill.path is None:
+                continue
+            lines.append(
+                f"- source={source} | name={skill.name} | emoji={emoji} | doc_path={skill.path} | description={skill.description}"
+            )
+        return lines
 
     @classmethod
     def _is_small_talk_or_greeting(cls, message: str) -> bool:

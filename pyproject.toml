@@ -1,7 +1,7 @@
 [project]
 name = "ownbot"
-version = "0.0.1"
-description = "OwnBot: A learning-oriented AI Agent framework implementing ReAct architecture"
+version = "0.0.2"
+description = "OwnBot_0.0.2"
 requires-python = ">=3.11"
 readme = "README.md"
 license = { text = "MIT" }

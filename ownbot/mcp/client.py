@@ -6,12 +6,17 @@ Provides functionality to connect to MCP servers via different transports
 
 from __future__ import annotations
 
+import json
 import os
+import uuid
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
+import asyncio
+
+import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
@@ -30,9 +35,206 @@ class MCPConnection:
     """Represents an active MCP server connection."""
 
     server_name: str
-    session: ClientSession
+    session: Any  # ClientSession or SimpleHTTPMCPClient
     tools: list[Tool]
     exit_stack: AsyncExitStack
+
+
+class SimpleHTTPMCPClient:
+    """Simple HTTP-only MCP client for servers without SSE support.
+
+    This client uses direct HTTP POST requests instead of streaming connections.
+    Suitable for simple MCP servers that only support request/response pattern.
+    """
+
+    def __init__(self, url: str, timeout: float = 30.0) -> None:
+        """Initialize the HTTP MCP client.
+
+        Args:
+            url: MCP server endpoint URL
+            timeout: Request timeout in seconds
+        """
+        self.url = url.rstrip("/")
+        self.timeout = timeout
+        # Disable env proxy for localhost to avoid connection issues
+        client_kwargs: dict[str, Any] = {"timeout": timeout}
+        if "localhost" in self.url or "127.0.0.1" in self.url:
+            client_kwargs["trust_env"] = False
+        self._client = httpx.AsyncClient(**client_kwargs)
+        self._request_id = 0
+        self._initialized = False
+        self._session_id: str | None = None
+        self.server_info: dict[str, Any] = {}
+        self.server_capabilities: dict[str, Any] = {}
+
+    async def initialize(self) -> None:
+        """Initialize the MCP session."""
+        self._request_id += 1
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._request_id,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "roots": {"listChanged": True},
+                    "sampling": {}
+                },
+                "clientInfo": {
+                    "name": "ownbot-mcp-client",
+                    "version": "1.0.0"
+                }
+            }
+        }
+
+        response_data = await self._send_request(request)
+        if "error" in response_data:
+            raise MCPConnectionError(f"Initialize failed: {response_data['error']}")
+
+        result = response_data.get("result", {})
+        self.server_info = result.get("serverInfo", {})
+        self.server_capabilities = result.get("capabilities", {})
+        self._initialized = True
+
+        logger.debug("MCP server info: {}", self.server_info)
+        logger.debug("MCP session ID: {}", self._session_id)
+
+        # Send initialized notification (MCP protocol requires this)
+        await self._send_notification("notifications/initialized", {})
+
+        # Wait for server to process the state change
+        await asyncio.sleep(0.5)
+
+    async def _send_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Send a JSON-RPC request to the server."""
+        try:
+            headers = {"Content-Type": "application/json"}
+            # Include session ID if available (for session-aware servers)
+            if self._session_id:
+                headers["mcp-session-id"] = self._session_id
+
+            resp = await self._client.post(
+                self.url,
+                json=request,
+                headers=headers
+            )
+            resp.raise_for_status()
+
+            # Extract session ID from response headers if present
+            session_id = resp.headers.get("mcp-session-id")
+            if session_id:
+                self._session_id = session_id
+                logger.debug("Received MCP session ID: {}", session_id)
+
+            return resp.json()
+        except httpx.HTTPError as e:
+            raise MCPConnectionError(f"HTTP request failed: {e}") from e
+        except json.JSONDecodeError as e:
+            raise MCPConnectionError(f"Invalid JSON response: {e}") from e
+
+    async def _send_notification(self, method: str, params: dict[str, Any]) -> None:
+        """Send a JSON-RPC notification (no response expected)."""
+        notification = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params
+        }
+        try:
+            headers = {"Content-Type": "application/json"}
+            if self._session_id:
+                headers["mcp-session-id"] = self._session_id
+
+            resp = await self._client.post(
+                self.url,
+                json=notification,
+                headers=headers
+            )
+            # Extract session ID from response headers if present
+            session_id = resp.headers.get("mcp-session-id")
+            if session_id:
+                self._session_id = session_id
+        except Exception:
+            # Notifications are best-effort
+            pass
+
+    async def list_tools(self) -> Any:
+        """List available tools from the server."""
+        if not self._initialized:
+            raise MCPConnectionError("Client not initialized")
+
+        self._request_id += 1
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._request_id,
+            "method": "tools/list",
+            "params": {}
+        }
+
+        response = await self._send_request(request)
+        if "error" in response:
+            raise MCPConnectionError(f"List tools failed: {response['error']}")
+
+        # Create a simple object with .tools attribute
+        result = response.get("result", {})
+        tools_data = result.get("tools", [])
+
+        # Convert to Tool objects
+        tools = []
+        for tool_data in tools_data:
+            tool = Tool(
+                name=tool_data.get("name", ""),
+                description=tool_data.get("description", ""),
+                inputSchema=tool_data.get("inputSchema", {})
+            )
+            tools.append(tool)
+
+        return type('ToolsResult', (), {'tools': tools})()
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> CallToolResult:
+        """Call a tool on the server."""
+        if not self._initialized:
+            raise MCPConnectionError("Client not initialized")
+
+        self._request_id += 1
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._request_id,
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments
+            }
+        }
+
+        response = await self._send_request(request)
+        if "error" in response:
+            raise MCPToolError(f"Tool call failed: {response['error']}")
+
+        result = response.get("result", {})
+        content = result.get("content", [])
+        is_error = result.get("isError", False)
+
+        # Convert content to TextContent objects
+        text_contents = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_contents.append(TextContent(type="text", text=item.get("text", "")))
+            elif isinstance(item, str):
+                text_contents.append(TextContent(type="text", text=item))
+
+        return CallToolResult(content=text_contents, isError=is_error)
+
+    async def aclose(self) -> None:
+        """Close the HTTP client."""
+        await self._client.aclose()
+
+    async def __aenter__(self) -> SimpleHTTPMCPClient:
+        """Async context manager entry."""
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Async context manager exit."""
+        await self.aclose()
 
 
 class MCPClientManager:
@@ -77,8 +279,7 @@ class MCPClientManager:
             elif config.transport == "sse":
                 session = await self._connect_sse(config)
             elif config.transport == "http":
-                # HTTP transport uses SSE client for now
-                session = await self._connect_sse(config)
+                session = await self._connect_http(config)
             else:
                 raise MCPConnectionError(f"Unknown transport: {config.transport}")
 
@@ -149,6 +350,24 @@ class MCPClientManager:
         # Initialize
         await session.initialize()
         return session
+
+    async def _connect_http(self, config: MCPServerConfig) -> SimpleHTTPMCPClient:
+        """Connect via simple HTTP transport (POST-only, no SSE)."""
+        if not config.url:
+            raise MCPConnectionError(f"URL required for HTTP transport: {config.name}")
+
+        logger.debug("Creating simple HTTP MCP client for {}", config.url)
+
+        # Create simple HTTP client
+        client = SimpleHTTPMCPClient(config.url, timeout=config.timeout)
+
+        # Register with exit stack for cleanup
+        await self._exit_stack.enter_async_context(client)
+
+        # Initialize
+        await client.initialize()
+        logger.debug("Simple HTTP MCP client initialized for {}", config.name)
+        return client
 
     async def connect_all(self, configs: list[MCPServerConfig]) -> list[MCPConnection]:
         """Connect to all enabled MCP servers.
@@ -266,8 +485,27 @@ class MCPClientManager:
     async def disconnect_all(self) -> None:
         """Disconnect all MCP servers and cleanup resources."""
         logger.info("Disconnecting from all MCP servers")
+
+        # Close each session gracefully first (only for SimpleHTTPMCPClient)
+        for name, conn in list(self._connections.items()):
+            try:
+                if hasattr(conn.session, 'aclose'):
+                    await conn.session.aclose()
+                    logger.debug("Closed MCP session: {}", name)
+            except Exception as e:
+                logger.debug("Error closing session {}: {}", name, e)
+
         self._connections.clear()
-        await self._exit_stack.aclose()
+
+        # Small delay to let stdio servers process shutdown
+        await asyncio.sleep(0.2)
+
+        # Close exit stack (may raise exceptions for some transports)
+        try:
+            await self._exit_stack.aclose()
+        except Exception as e:
+            logger.debug("Exit stack cleanup error (expected for some transports): {}", e)
+
         # Create new exit stack for potential reconnection
         self._exit_stack = AsyncExitStack()
 

@@ -154,6 +154,11 @@ class AgentLoop:
         if not self.cfg.mcp.enabled or not self.mcp_manager:
             return
 
+        # Prevent duplicate initialization
+        if self.mcp_registry and self.mcp_manager._connections:
+            logger.debug("MCP already initialized, skipping")
+            return
+
         # Delayed import to avoid circular imports
         from ownbot.mcp.tools import MCPRegistry
 

@@ -51,9 +51,11 @@
 
 - **🚀 多平台支持** - 同时支持 Telegram 和 WhatsApp，一个机器人，多个入口
 - **🧠 智能架构** - 基于 ReAct (Reasoning + Acting) 架构，支持复杂任务处理
+- **🔌 MCP 协议支持** - 接入 Model Context Protocol，无缝使用数千个外部工具
+- **📊 实时进度** - 处理过程中实时显示思考步骤和工具调用状态
 - **🛠️ 工具系统** - 内置文件操作、Shell 命令、网络请求等实用工具
 - **📦 技能系统** - 模块化技能设计，轻松扩展新功能（如天气查询）
-- **💾 记忆管理** - 智能会话管理，支持记忆巩固，保持上下文连贯
+- **💾 记忆管理** - 简单滑窗机制，自动保留最近对话历史
 - **⚡ 异步高性能** - 基于 Python asyncio，高并发处理能力
 - **🔧 易于扩展** - 清晰的模块化设计，方便二次开发
 
@@ -79,11 +81,11 @@
 - [X] 基础工具系统（文件、Shell、网络）
 - [X] 技能系统框架（向量召回SKILL+渐进式披露，安装千万skill不成问题）
 - [X] 会话、记忆管理
+- [X] 🔌 **MCP 协议支持** - 接入 Model Context Protocol，无缝使用外部工具
 
 #### 🚧 进行中
 
 - [ ] 👤 **Human-in-the-Loop** - 关键操作需要人工确认
-- [ ] 🔌 **MCP 协议支持** - 接入 Model Context Protocol
 - [ ] 更完善的文档和教程
 - [ ] 更多内置技能（日历、邮件等）
 
@@ -144,6 +146,9 @@
 │  │    Tools     │  │   Skills     │  │    LLM       │           │
 │  │  (文件/Shell) │  │  (天气/扩展)  │  │  (DeepSeek)  │           │
 │  └──────────────┘  └──────────────┘  └──────────────┘           │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  🔌 MCP Tools (filesystem/sqlite/github/...)             │    │
+│  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -270,7 +275,7 @@ ownbot/skills/
 ├── weather/           # 天气查询技能
 │   ├── SKILL.md      # 技能定义
 ├── translate/        # 翻译技能
-|   ├── SKILL.md      # 技能定义 
+|   ├── SKILL.md      # 技能定义
 └── your_skill/       # 你的自定义技能
     └── SKILL.md
 ```
@@ -288,6 +293,88 @@ emoji: 🌤️
 
 查询指定城市的天气信息...
 ```
+
+---
+
+## 🔌 MCP (Model Context Protocol) 支持
+
+OwnBot 支持 MCP 协议，可以无缝接入数千个外部工具。
+
+### 什么是 MCP？
+
+MCP 是 Anthropic 推出的开放协议，标准化了 AI 与外部工具的交互方式。通过 MCP，OwnBot 可以使用：
+
+- 📁 **文件系统工具** - 读取、写入、搜索文件
+- 🗄️ **数据库工具** - SQLite、PostgreSQL 查询
+- 🔧 **开发工具** - GitHub、Git 操作
+- 🌐 **网络工具** - HTTP 请求、数据获取
+
+### 配置 MCP
+
+编辑 `~/.ownbot/config.json`：
+
+```json
+{
+  "mcp": {
+    "enabled": true,
+    "servers": [
+      {
+        "name": "filesystem",
+        "enabled": true,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+        "timeout": 30
+      },
+      {
+        "name": "sqlite",
+        "enabled": true,
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-sqlite", "--db-path", "/path/to/data.db"],
+        "timeout": 60
+      }
+    ]
+  }
+}
+```
+
+### 使用 MCP 工具
+
+配置完成后，直接通过自然语言使用：
+
+- "帮我读取 /path/to/file.txt 文件内容"
+- "查询数据库中有多少用户"
+- "列出 /workspace 目录下的所有文件"
+
+OwnBot 会自动调用对应的 MCP 工具并返回结果。
+
+---
+
+## 📊 实时进度显示
+
+OwnBot 在处理复杂任务时，会实时显示处理进度：
+
+```
+🤔 正在思考问题...
+🔧 步骤 1: 调用 filesystem:list_files...
+✅ 工具执行完成，继续思考...
+🔄 第 2 轮思考...
+🔧 步骤 2: 调用 filesystem:read_file...
+✅ 工具执行完成，继续思考...
+```
+
+### 进度状态说明
+
+| 图标 | 含义 |
+|------|------|
+| 🤔 | 正在思考问题 |
+| 🔄 | 第 N 轮思考中 |
+| 🔧 | 正在调用工具 |
+| ✅ | 工具执行成功 |
+| ❌ | 工具执行失败 |
+
+这让用户能够了解 Agent 的工作状态，不再感到"黑盒"。
 
 ---
 
@@ -339,7 +426,7 @@ emoji: 🌤️
 
 ```json
 {
-  "adminIds": ["admin_telegram_user_id"], //针对telegram
+  "adminIds": ["admin_telegram_user_id"],
   "telegram": {
     "enabled": true,
     "token": "YOUR_BOT_TOKEN",
@@ -359,6 +446,27 @@ emoji: 🌤️
     "model": "gpt-4",
     "temperature": 0.1,
     "maxTokens": 8192
+  },
+  "mcp": {
+    "enabled": true,
+    "servers": [
+      {
+        "name": "filesystem",
+        "enabled": true,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+        "timeout": 30
+      },
+      {
+        "name": "sqlite",
+        "enabled": false,
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-sqlite", "--db-path", "/path/to/data.db"],
+        "timeout": 60
+      }
+    ]
   }
 }
 ```
@@ -395,6 +503,38 @@ emoji: 🌤️
 | `temperature` | float  | 0.7                         | 温度参数（0-2） |
 | `maxTokens`   | int    | 8192                        | 最大 Token 数   |
 
+#### MCP 配置
+
+| 配置项      | 类型    | 默认  | 说明                          |
+| ----------- | ------- | ----- | ----------------------------- |
+| `enabled` | boolean | false | 是否启用 MCP 工具支持         |
+| `servers` | array   | []    | MCP 服务器配置列表，见下方说明 |
+
+**MCP 服务器配置项：**
+
+| 配置项        | 类型    | 默认值   | 说明                                       |
+| ------------- | ------- | -------- | ------------------------------------------ |
+| `name`      | string  | required | 服务器唯一标识（如 filesystem）          |
+| `enabled`   | boolean | true     | 是否启用该服务器                           |
+| `transport` | string  | "stdio"  | 传输方式：`stdio` / `sse` / `http`       |
+| `command`   | string  | null     | stdio 传输的命令（如 npx, python）       |
+| `args`      | array   | []       | 命令参数                                   |
+| `url`       | string  | null     | sse/http 传输的服务器 URL                  |
+| `env`       | object  | {}       | 环境变量（如 API 密钥）                    |
+| `timeout`   | number  | 30       | 请求超时时间（秒）                         |
+
+**常用的 MCP 服务器：**
+
+| 服务器       | 命令示例                                                               | 说明               |
+| ------------ | ---------------------------------------------------------------------- | ------------------ |
+| filesystem | `npx -y @modelcontextprotocol/server-filesystem /path`                 | 文件系统操作       |
+| sqlite     | `uvx mcp-server-sqlite --db-path /path/to/db`                          | SQLite 数据库      |
+| github     | `npx -y @modelcontextprotocol/server-github`                           | GitHub API 操作    |
+| postgres   | `npx -y @modelcontextprotocol/server-postgres postgresql://localhost/` | PostgreSQL 数据库  |
+| fetch      | `uvx mcp-server-fetch`                                                 | HTTP 请求          |
+
+更多 MCP 服务器可参考 [MCP 官方文档](https://modelcontextprotocol.io/)
+
 ---
 
 ## 🛠️ 开发指南
@@ -425,6 +565,10 @@ ownbot/
 ├── config/               # 配置管理
 │   ├── __init__.py
 │   └── schema.py
+├── mcp/                  # MCP 协议支持 (NEW)
+│   ├── __init__.py
+│   ├── client.py        # MCP 客户端管理
+│   └── tools.py         # MCP 工具适配器
 ├── skills/               # 技能系统
 │   ├── loader.py
 │   ├── models.py
@@ -444,11 +588,11 @@ ownbot/
 async def my_custom_tool(param1: str, param2: int = 10) -> str:
     """
     我的自定义工具
-  
+
     Args:
         param1: 第一个参数
         param2: 第二个参数，默认10
-  
+
     Returns:
         处理结果
     """
@@ -572,6 +716,7 @@ INFO  Loaded skill: translate 🌐
 
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - Telegram Bot 框架
 - [@whiskeysockets/baileys](https://github.com/WhiskeySockets/Baileys) - WhatsApp Web API
+- [MCP](https://modelcontextprotocol.io/) - Model Context Protocol，标准化 AI 工具协议
 - [Rich](https://github.com/Textualize/rich) - 终端美化
 
 ---

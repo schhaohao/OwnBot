@@ -18,32 +18,31 @@ from loguru import logger
 @dataclass
 class SkillSearchResult:
     """Result of a skill search."""
-    
+
     name: str
     description: str
     path: str
     score: float
     metadata: dict[str, Any]
-    
+
     def to_summary(self) -> str:
         """Generate a brief summary for system prompt."""
         return f"- {self.name}: {self.description}"
 
 
 class SkillRetriever:
-    """
-    Retriever for skills using vector search.
-    
+    """Retriever for skills using vector search.
+
     This class handles:
     1. Building vector index from skill metadata
     2. Searching relevant skills by query
     3. Returning skill summaries (not full content)
-    
+
     The full skill content is loaded on-demand by the agent.
-    
+
     Embedding model is configurable, and dimension is automatically detected.
     """
-    
+
     # Common embedding models and their dimensions
     # Used as fallback if auto-detection fails
     MODEL_DIMENSIONS = {
@@ -65,7 +64,7 @@ class SkillRetriever:
         "BAAI/bge-base-en": 768,
     }
     _EMBEDDING_MODEL_CACHE: dict[str, Any] = {}
-    
+
     def __init__(
         self,
         skills_dir: Path,
@@ -76,9 +75,8 @@ class SkillRetriever:
         collection_name: str = "ownbot_skills",
         embedding_model: str = "BAAI/bge-m3",
     ):
-        """
-        Initialize the skill retriever.
-        
+        """Initialize the skill retriever.
+
         Args:
             skills_dir: Directory containing skill subdirectories
             use_milvus_lite: Use Milvus Lite (embedded) instead of Milvus server
@@ -95,7 +93,7 @@ class SkillRetriever:
         self.milvus_db_path = milvus_db_path
         self.collection_name = collection_name
         self.embedding_model = embedding_model
-        
+
         self._client = None
         self._embedding_fn = None
         self._embedding_dim: int | None = None
@@ -104,13 +102,13 @@ class SkillRetriever:
         self._fallback_ready = False
         self._fallback_use_embeddings = False
         self._fallback_index: list[dict[str, Any]] = []
-    
+
     def _get_client(self):
         """Lazy initialization of Milvus client."""
         if self._client is None and not self._use_fallback:
             try:
                 from pymilvus import MilvusClient
-                
+
                 if self.use_milvus_lite:
                     # Use Milvus Lite (embedded)
                     if not self._can_use_milvus_lite():
@@ -124,7 +122,7 @@ class SkillRetriever:
                     os.makedirs(os.path.dirname(db_path), exist_ok=True)
                     logger.info("Connecting to Milvus Lite at {}", db_path)
                     self._client = MilvusClient(uri=db_path)
-                    
+
                 else:
                     # Use Milvus server
                     host = self.milvus_host or "127.0.0.1"
@@ -133,13 +131,15 @@ class SkillRetriever:
                     logger.info("Connecting to Milvus server at {}", uri_str)
                     self._client = MilvusClient(uri=uri_str)
                     logger.info("Connected to Milvus server at {}:{}", host, self.milvus_port)
-                    
+
             except ImportError as e:
                 logger.warning("pymilvus not installed, falling back to in-memory index: {}", e)
                 self._use_fallback = True
                 self._client = None
             except Exception as e:
-                logger.warning("Failed to connect to Milvus, falling back to in-memory index: {}", e)
+                logger.warning(
+                    "Failed to connect to Milvus, falling back to in-memory index: {}", e
+                )
                 self._use_fallback = True
                 self._client = None
         return self._client
@@ -177,12 +177,13 @@ class SkillRetriever:
                 sock_path.unlink(missing_ok=True)
             except OSError:
                 pass
-    
+
     def _get_embedding_fn(self):
         """Lazy initialization of embedding function."""
         if self._embedding_fn is None:
             try:
                 from sentence_transformers import SentenceTransformer
+
                 cached = self._EMBEDDING_MODEL_CACHE.get(self.embedding_model)
                 if cached is not None:
                     self._embedding_fn = cached
@@ -193,7 +194,9 @@ class SkillRetriever:
                     self._EMBEDDING_MODEL_CACHE[self.embedding_model] = self._embedding_fn
                     logger.info("Loaded embedding model: {}", self.embedding_model)
             except ImportError:
-                logger.error("sentence-transformers not installed. Run: pip install sentence-transformers")
+                logger.error(
+                    "sentence-transformers not installed. Run: pip install sentence-transformers"
+                )
                 raise
             except Exception as e:
                 logger.error("Failed to load embedding model '{}': {}", self.embedding_model, e)
@@ -203,9 +206,13 @@ class SkillRetriever:
     def warm_up_query_embedding(self) -> None:
         """Warm the embedding model if workspace search will need it."""
         if self._count_skill_dirs() == 0:
-            logger.info("Skipping embedding warm-up because {} has no workspace skills", self.skills_dir)
+            logger.info(
+                "Skipping embedding warm-up because {} has no workspace skills", self.skills_dir
+            )
             return
-        if self._use_fallback and os.environ.get("OWNBOT_FALLBACK_USE_EMBEDDINGS", "").lower() not in {
+        if self._use_fallback and os.environ.get(
+            "OWNBOT_FALLBACK_USE_EMBEDDINGS", ""
+        ).lower() not in {
             "1",
             "true",
             "yes",
@@ -223,7 +230,7 @@ class SkillRetriever:
         dot = 0.0
         norm_a = 0.0
         norm_b = 0.0
-        for a, b in zip(vec_a, vec_b):
+        for a, b in zip(vec_a, vec_b, strict=False):
             dot += a * b
             norm_a += a * a
             norm_b += b * b
@@ -236,7 +243,8 @@ class SkillRetriever:
         if not self.skills_dir.exists():
             return []
         return [
-            item for item in self.skills_dir.iterdir()
+            item
+            for item in self.skills_dir.iterdir()
             if item.is_dir() and not item.name.startswith("_") and (item / "SKILL.md").exists()
         ]
 
@@ -302,7 +310,7 @@ class SkillRetriever:
 
         self._fallback_index = []
         if use_embeddings and vectors is not None:
-            for skill, vec in zip(skills, vectors):
+            for skill, vec in zip(skills, vectors, strict=False):
                 vector = vec.tolist() if hasattr(vec, "tolist") else list(vec)
                 self._fallback_index.append({**skill, "vector": vector})
         else:
@@ -365,20 +373,19 @@ class SkillRetriever:
                 )
             )
         return results
-    
+
     def get_embedding_dimension(self) -> int:
-        """
-        Get the embedding dimension from the model.
-        
+        """Get the embedding dimension from the model.
+
         Automatically detects dimension from the loaded model.
         Falls back to known dimensions lookup if needed.
-        
+
         Returns:
             Embedding dimension (e.g., 384, 768)
         """
         if self._embedding_dim is None:
             embedding_fn = self._get_embedding_fn()
-            
+
             # Try to get dimension from model
             try:
                 # sentence-transformers models have get_sentence_embedding_dimension()
@@ -387,16 +394,19 @@ class SkillRetriever:
                     self._embedding_dim = dim
                     logger.info("Auto-detected embedding dimension: {}", dim)
                     return dim
-            except Exception:
-                pass
-            
+            except Exception as e:
+                logger.debug("Could not auto-detect dimension: {}", e)
+
             # Fallback: lookup known dimensions
             if self.embedding_model in self.MODEL_DIMENSIONS:
                 self._embedding_dim = self.MODEL_DIMENSIONS[self.embedding_model]
-                logger.info("Using known embedding dimension for {}: {}", 
-                          self.embedding_model, self._embedding_dim)
+                logger.info(
+                    "Using known embedding dimension for {}: {}",
+                    self.embedding_model,
+                    self._embedding_dim,
+                )
                 return self._embedding_dim
-            
+
             # Last resort: encode a test sentence and measure
             try:
                 test_embedding = embedding_fn.encode(["test"])
@@ -405,49 +415,50 @@ class SkillRetriever:
                 return self._embedding_dim
             except Exception as e:
                 logger.error("Failed to determine embedding dimension: {}", e)
-                raise RuntimeError(f"Cannot determine embedding dimension for {self.embedding_model}")
-        
+                raise RuntimeError(
+                    f"Cannot determine embedding dimension for {self.embedding_model}"
+                )
+
         return self._embedding_dim
-    
+
     def _extract_skill_metadata(self, skill_path: Path) -> dict[str, Any] | None:
-        """
-        Extract metadata from a skill's SKILL.md file.
-        
+        """Extract metadata from a skill's SKILL.md file.
+
         Only reads the frontmatter, not the full content.
-        
+
         Args:
             skill_path: Path to skill directory
-            
+
         Returns:
             Skill metadata dict or None if invalid
         """
         skill_file = skill_path / "SKILL.md"
         if not skill_file.exists():
             return None
-        
+
         try:
             content = skill_file.read_text(encoding="utf-8")
-            
+
             # Extract YAML frontmatter
-            match = re.match(r'^---\s*\n(.*?)\n---\s*\n', content, re.DOTALL)
+            match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
             if not match:
                 logger.warning("No frontmatter found in {}", skill_file)
                 return None
-            
+
             frontmatter = yaml.safe_load(match.group(1)) or {}
-            
+
             name = frontmatter.get("name") or skill_path.name
             description = frontmatter.get("description", "")
-            
+
             # Extract ownbot-specific metadata
             metadata = frontmatter.get("metadata", {})
             ownbot_meta = metadata.get("ownbot", {}) if isinstance(metadata, dict) else {}
-            
+
             # Build search text from metadata
             keywords = ownbot_meta.get("keywords", [])
             use_cases = ownbot_meta.get("use_cases", [])
             category = ownbot_meta.get("category", "general")
-            
+
             search_text = f"{name}. {description}"
             if keywords:
                 search_text += f" Keywords: {', '.join(keywords)}"
@@ -455,7 +466,7 @@ class SkillRetriever:
                 search_text += f" Use cases: {', '.join(use_cases)}"
             if category:
                 search_text += f" Category: {category}"
-            
+
             return {
                 "id": name,
                 "name": name,
@@ -467,18 +478,17 @@ class SkillRetriever:
                 "category": category,
                 "emoji": ownbot_meta.get("emoji", "🔧"),
             }
-            
+
         except Exception as e:
             logger.error("Failed to parse skill {}: {}", skill_path, e)
             return None
-    
+
     def build_index(self, force_rebuild: bool = False) -> int:
-        """
-        Build or update the vector index for all skills.
-        
+        """Build or update the vector index for all skills.
+
         Args:
             force_rebuild: If True, delete existing collection and rebuild
-            
+
         Returns:
             Number of skills indexed
         """
@@ -487,7 +497,7 @@ class SkillRetriever:
             return self._build_fallback_index(force_rebuild=force_rebuild)
 
         skills = self._collect_skill_metadata()
-        
+
         # Check if collection exists
         if client.has_collection(self.collection_name):
             if force_rebuild:
@@ -498,9 +508,7 @@ class SkillRetriever:
                     results = self._get_indexed_skill_rows()
                     count = len(results)
                     current_paths = self._workspace_skill_paths()
-                    indexed_paths = {
-                        row.get("path") for row in results if row.get("path")
-                    }
+                    indexed_paths = {row.get("path") for row in results if row.get("path")}
 
                     if count != len(skills) or indexed_paths != current_paths:
                         logger.info(
@@ -533,19 +541,20 @@ class SkillRetriever:
             return 0
 
         embedding_fn = self._get_embedding_fn()
-        
+
         # Get embedding dimension dynamically
         dimension = self.get_embedding_dimension()
-        
+
         # Generate embeddings
-        logger.info("Generating embeddings for {} skills using {}...", 
-                   len(skills), self.embedding_model)
+        logger.info(
+            "Generating embeddings for {} skills using {}...", len(skills), self.embedding_model
+        )
         search_texts = [s["search_text"] for s in skills]
         embeddings = embedding_fn.encode(search_texts, show_progress_bar=True)
-        
+
         # Create collection with dynamic dimension
         from pymilvus import DataType
-        
+
         client.create_collection(
             collection_name=self.collection_name,
             dimension=dimension,  # Dynamic dimension from model
@@ -553,47 +562,46 @@ class SkillRetriever:
             id_type=DataType.VARCHAR,
             max_length=256,
         )
-        
-        logger.info("Created collection '{}' with dimension {}", 
-                   self.collection_name, dimension)
-        
+
+        logger.info("Created collection '{}' with dimension {}", self.collection_name, dimension)
+
         # Prepare data for insertion
         ids = [s["id"] for s in skills]
         vectors = embeddings.tolist()
-        
+
         # Store metadata as JSON strings
         metadatas = []
         for skill in skills:
-            metadatas.append({
-                "name": skill["name"],
-                "description": skill["description"],
-                "path": skill["path"],
-                "keywords": ",".join(skill["keywords"]),
-                "use_cases": ",".join(skill["use_cases"]),
-                "category": skill["category"],
-                "emoji": skill["emoji"],
-            })
-        
+            metadatas.append(
+                {
+                    "name": skill["name"],
+                    "description": skill["description"],
+                    "path": skill["path"],
+                    "keywords": ",".join(skill["keywords"]),
+                    "use_cases": ",".join(skill["use_cases"]),
+                    "category": skill["category"],
+                    "emoji": skill["emoji"],
+                }
+            )
+
         client.insert(
             collection_name=self.collection_name,
             data=[
                 {"id": id_, "vector": vec, **meta}
-                for id_, vec, meta in zip(ids, vectors, metadatas)
+                for id_, vec, meta in zip(ids, vectors, metadatas, strict=False)
             ],
         )
-        
-        logger.info("Successfully indexed {} skills using {}", 
-                   len(skills), self.embedding_model)
+
+        logger.info("Successfully indexed {} skills using {}", len(skills), self.embedding_model)
         return len(skills)
-    
+
     def search(self, query: str, top_k: int = 50) -> list[SkillSearchResult]:
-        """
-        Search for relevant skills by query.
-        
+        """Search for relevant skills by query.
+
         Args:
             query: User query text
             top_k: Number of top results to return (default 50)
-            
+
         Returns:
             List of skill search results
         """
@@ -605,7 +613,9 @@ class SkillRetriever:
         )
         if self._use_fallback:
             results = self._search_fallback(query, top_k)
-            logger.info("Skill search finished with {} result(s) via fallback backend", len(results))
+            logger.info(
+                "Skill search finished with {} result(s) via fallback backend", len(results)
+            )
             return results
         if not self._initialized:
             self._ensure_collection_exists()
@@ -615,41 +625,51 @@ class SkillRetriever:
         if self._count_skill_dirs() == 0:
             logger.info("Skipping workspace skill search because {} has no skills", self.skills_dir)
             return []
-        
+
         client = self._get_client()
         embedding_fn = self._get_embedding_fn()
-        
+
         # Generate query embedding
         query_vector = embedding_fn.encode([query])[0].tolist()
-        
+
         # Search
         results = client.search(
             collection_name=self.collection_name,
             data=[query_vector],
             limit=top_k,
-            output_fields=["name", "description", "path", "keywords", "use_cases", "category", "emoji"],
+            output_fields=[
+                "name",
+                "description",
+                "path",
+                "keywords",
+                "use_cases",
+                "category",
+                "emoji",
+            ],
         )
-        
+
         # Parse results
         search_results = []
         for result in results[0]:  # First (and only) query
             entity = result["entity"]
-            search_results.append(SkillSearchResult(
-                name=entity["name"],
-                description=entity["description"],
-                path=entity["path"],
-                score=1.0 - result["distance"],  # Convert distance to similarity score
-                metadata={
-                    "keywords": entity["keywords"].split(",") if entity["keywords"] else [],
-                    "use_cases": entity["use_cases"].split(",") if entity["use_cases"] else [],
-                    "category": entity["category"],
-                    "emoji": entity["emoji"],
-                }
-            ))
+            search_results.append(
+                SkillSearchResult(
+                    name=entity["name"],
+                    description=entity["description"],
+                    path=entity["path"],
+                    score=1.0 - result["distance"],  # Convert distance to similarity score
+                    metadata={
+                        "keywords": entity["keywords"].split(",") if entity["keywords"] else [],
+                        "use_cases": entity["use_cases"].split(",") if entity["use_cases"] else [],
+                        "category": entity["category"],
+                        "emoji": entity["emoji"],
+                    },
+                )
+            )
 
         logger.info("Skill search finished with {} result(s) via Milvus", len(search_results))
         return search_results
-    
+
     def _ensure_collection_exists(self):
         """Ensure the collection exists, build if not."""
         if self._use_fallback:
@@ -669,11 +689,10 @@ class SkillRetriever:
         # Note: We don't check for updates here to avoid rebuilding index on every search.
         # Index updates should be done explicitly via build_index(force_rebuild=True) or index-skills command.
         self._initialized = True
-    
+
     def _check_and_update_index(self) -> bool:
-        """
-        Check if the index needs to be updated and rebuild if necessary.
-        
+        """Check if the index needs to be updated and rebuild if necessary.
+
         Returns:
             True if index was rebuilt, False otherwise
         """
@@ -683,92 +702,96 @@ class SkillRetriever:
             return len(self._fallback_index) != before
         try:
             fs_skill_count = self._count_skill_dirs()
-            
+
             indexed_rows = self._get_indexed_skill_rows()
             milvus_count = len(indexed_rows)
             indexed_paths = {row.get("path") for row in indexed_rows if row.get("path")}
             current_paths = self._workspace_skill_paths()
-            
-            logger.debug("Skill count - Filesystem: {}, Milvus(query): {}", fs_skill_count, milvus_count)
-            
+
+            logger.debug(
+                "Skill count - Filesystem: {}, Milvus(query): {}", fs_skill_count, milvus_count
+            )
+
             if fs_skill_count != milvus_count or indexed_paths != current_paths:
                 logger.info(
                     "Skill index mismatch detected (fs_count={}, milvus_count={}), rebuilding index...",
-                    fs_skill_count, milvus_count
+                    fs_skill_count,
+                    milvus_count,
                 )
                 self.build_index(force_rebuild=True)
                 return True
-            
+
             return False
-            
+
         except Exception as e:
             logger.warning("Failed to check index status: {}", e)
             return False
-    
+
     def needs_rebuild(self) -> bool:
-        """
-        Check if the index needs to be rebuilt.
-        
+        """Check if the index needs to be rebuilt.
+
         Returns:
             True if index needs rebuild, False otherwise
         """
         try:
             client = self._get_client()
-            
+
             # If collection doesn't exist, needs build
             if not client.has_collection(self.collection_name):
                 return True
-            
+
             fs_skill_count = self._count_skill_dirs()
             indexed_rows = self._get_indexed_skill_rows()
             milvus_count = len(indexed_rows)
             indexed_paths = {row.get("path") for row in indexed_rows if row.get("path")}
 
             return fs_skill_count != milvus_count or indexed_paths != self._workspace_skill_paths()
-            
+
         except Exception as e:
             logger.warning("Failed to check if rebuild needed: {}", e)
             return True
-    
+
     def get_skill_summary(self, skill_name: str) -> str | None:
-        """
-        Get a brief summary of a skill for system prompt.
-        
+        """Get a brief summary of a skill for system prompt.
+
         Args:
             skill_name: Name of the skill
-            
+
         Returns:
             Skill summary string or None if not found
         """
         skill_path = self.skills_dir / skill_name
         metadata = self._extract_skill_metadata(skill_path)
-        
+
         if metadata:
             emoji = metadata.get("emoji", "🔧")
             return f"{emoji} **{metadata['name']}**: {metadata['description']}"
-        
+
         return None
-    
+
     def format_skills_for_prompt(self, skills: list[SkillSearchResult]) -> str:
-        """
-        Format a list of skills for inclusion in system prompt.
-        
+        """Format a list of skills for inclusion in system prompt.
+
         Args:
             skills: List of skill search results
-            
+
         Returns:
             Formatted string for system prompt
         """
         if not skills:
             return "No relevant skills found."
-        
+
         lines = ["## Available Skills\n"]
         lines.append(f"You have access to the following {len(skills)} skills:\n")
-        
+
         for skill in skills:
             emoji = skill.metadata.get("emoji", "🔧")
-            lines.append(f"{emoji} **{skill.name}**: {skill.description} (doc path: {Path(skill.path) / 'SKILL.md'})")
-        
-        lines.append("\nTo use a skill, read the exact doc path shown above with the `read_file` tool.")
-        
+            lines.append(
+                f"{emoji} **{skill.name}**: {skill.description} (doc path: {Path(skill.path) / 'SKILL.md'})"
+            )
+
+        lines.append(
+            "\nTo use a skill, read the exact doc path shown above with the `read_file` tool."
+        )
+
         return "\n".join(lines)

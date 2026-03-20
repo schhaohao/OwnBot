@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, List, Optional
 
 from loguru import logger
 
@@ -14,13 +13,10 @@ from ownbot.config.schema import AppConfig
 
 
 class ChannelManager:
-    """
-    Manages all chat channels and dispatches outbound messages.
-    """
+    """Manages all chat channels and dispatches outbound messages."""
 
     def __init__(self, config: AppConfig, bus: MessageBus):
-        """
-        Initialize the channel manager.
+        """Initialize the channel manager.
 
         Args:
             config: The application configuration.
@@ -28,8 +24,8 @@ class ChannelManager:
         """
         self.config = config
         self.bus = bus
-        self.channels: Dict[str, BaseChannel] = {}
-        self._tasks: List[asyncio.Task] = []
+        self.channels: dict[str, BaseChannel] = {}
+        self._tasks: list[asyncio.Task] = []
 
     def setup_channels(self) -> None:
         """Set up all enabled channels."""
@@ -53,12 +49,12 @@ class ChannelManager:
             task = asyncio.create_task(channel.start())
             self._tasks.append(task)
             logger.info(f"Started {channel.display_name} channel")
-        
+
         # Start message bus consumer
         consumer_task = asyncio.create_task(self._consume_outbound_messages())
         self._tasks.append(consumer_task)
         logger.info("Started message bus consumer")
-    
+
     async def _consume_outbound_messages(self) -> None:
         """Consume outbound messages from the message bus and dispatch them to channels."""
         while True:
@@ -85,8 +81,7 @@ class ChannelManager:
         self._tasks.clear()
 
     async def dispatch(self, msg: OutboundMessage) -> None:
-        """
-        Dispatch an outbound message to the appropriate channel.
+        """Dispatch an outbound message to the appropriate channel.
 
         Args:
             msg: The message to dispatch.

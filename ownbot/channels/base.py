@@ -11,8 +11,7 @@ from ownbot.bus.queue import MessageBus
 
 
 class BaseChannel(ABC):
-    """
-    Abstract base class for chat channel implementations.
+    """Abstract base class for chat channel implementations.
 
     Each channel (Telegram, Discord, etc.) should implement this interface
     to integrate with the ownbot message bus.
@@ -23,8 +22,7 @@ class BaseChannel(ABC):
     transcription_api_key: str = ""
 
     def __init__(self, config: Any, bus: MessageBus):
-        """
-        Initialize the channel.
+        """Initialize the channel.
 
         Args:
             config: Channel-specific configuration.
@@ -41,8 +39,7 @@ class BaseChannel(ABC):
 
     @abstractmethod
     async def start(self) -> None:
-        """
-        Start the channel and begin listening for messages.
+        """Start the channel and begin listening for messages.
 
         This should be a long-running async task that:
         1. Connects to the chat platform
@@ -58,8 +55,7 @@ class BaseChannel(ABC):
 
     @abstractmethod
     async def send(self, msg: OutboundMessage) -> None:
-        """
-        Send a message through this channel.
+        """Send a message through this channel.
 
         Args:
             msg: The message to send.
@@ -85,8 +81,7 @@ class BaseChannel(ABC):
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
     ) -> None:
-        """
-        Handle an incoming message from the chat platform.
+        """Handle an incoming message from the chat platform.
 
         This method checks permissions and forwards to the bus.
 
@@ -102,7 +97,8 @@ class BaseChannel(ABC):
             logger.warning(
                 "Access denied for sender {} on channel {}. "
                 "Add them to allowFrom list in config to grant access.",
-                sender_id, self.name,
+                sender_id,
+                self.name,
             )
             return
 

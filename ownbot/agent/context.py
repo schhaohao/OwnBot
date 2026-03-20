@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 from loguru import logger
 
@@ -11,11 +11,10 @@ from ownbot.skills import SkillLoader, SkillSummary
 
 
 class ContextBuilder:
-    """
-    Builds context for LLM calls by combining session history, system prompts, and current input.
-    
+    """Builds context for LLM calls by combining session history, system prompts, and current input.
+
     Implements ReAct (Reasoning + Acting) architecture for better complex task handling.
-    
+
     Skill Loading Strategy (Progressive Disclosure):
     1. Load all built-in and workspace skill metadata on startup
     2. Expose only metadata in the system prompt
@@ -32,8 +31,8 @@ class ContextBuilder:
     def __init__(
         self,
         workspace: Path,
-        builtin_skills_dir: Optional[Path] = None,
-        workspace_skills_dir: Optional[Path] = None,
+        builtin_skills_dir: Path | None = None,
+        workspace_skills_dir: Path | None = None,
         enable_rag: bool = True,
         use_milvus_lite: bool = True,
         milvus_host: str = "localhost",
@@ -41,9 +40,8 @@ class ContextBuilder:
         milvus_db_path: str = "./milvus_data/ownbot.db",
         embedding_model: str = "BAAI/bge-m3",
     ):
-        """
-        Initialize the context builder.
-        
+        """Initialize the context builder.
+
         Args:
             workspace: Workspace directory
             builtin_skills_dir: Directory containing built-in skills bundled with OwnBot
@@ -79,7 +77,7 @@ class ContextBuilder:
 
         # Keep the vector retriever available for explicit indexing/search flows.
         self.enable_rag = enable_rag
-        self.skill_retriever: Optional[SkillRetriever] = None
+        self.skill_retriever: SkillRetriever | None = None
         if enable_rag:
             try:
                 self.skill_retriever = SkillRetriever(
@@ -94,29 +92,28 @@ class ContextBuilder:
                 logger.warning("Failed to initialize skill retriever: {}", e)
                 self.enable_rag = False
                 self.skill_retriever = None
-    
+
     def build_messages(
         self,
-        history: List[dict[str, Any]],
+        history: list[dict[str, Any]],
         current_message: str,
-        media: Optional[List[str]] = None,
-        channel: Optional[str] = None,
-        chat_id: Optional[str] = None,
-    ) -> List[dict[str, Any]]:
-        """
-        Build a list of messages for the LLM using ReAct architecture.
-        
+        media: list[str] | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build a list of messages for the LLM using ReAct architecture.
+
         Args:
             history: Previous messages in the session.
             current_message: The current user message.
             media: Optional list of media file paths.
             channel: The channel the message came from.
             chat_id: The chat ID.
-        
+
         Returns:
             A list of message dicts for the LLM.
         """
-        messages: List[dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         self._refresh_skill_catalogs_if_needed()
 
         # Native tool-calling System prompt
@@ -141,11 +138,11 @@ class ContextBuilder:
 
     def add_assistant_message(
         self,
-        messages: List[dict[str, Any]],
-        content: Optional[str],
-        tool_calls: Optional[List[dict[str, Any]]] = None,
-        reasoning_content: Optional[str] = None,
-    ) -> List[dict[str, Any]]:
+        messages: list[dict[str, Any]],
+        content: str | None,
+        tool_calls: list[dict[str, Any]] | None = None,
+        reasoning_content: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Append an assistant message in the format expected by the provider."""
         msg: dict[str, Any] = {"role": "assistant"}
         if content:
@@ -159,18 +156,20 @@ class ContextBuilder:
 
     def add_tool_result(
         self,
-        messages: List[dict[str, Any]],
+        messages: list[dict[str, Any]],
         tool_call_id: str,
         tool_name: str,
         result: str,
-    ) -> List[dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Append a tool result message so the next LLM turn can observe it."""
-        messages.append({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "name": tool_name,
-            "content": f"Observation: {result}",
-        })
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "name": tool_name,
+                "content": f"Observation: {result}",
+            }
+        )
         return messages
 
     def parse_react_response(self, content: str) -> dict[str, Any]:
@@ -199,7 +198,7 @@ class ContextBuilder:
 
         return result
 
-    def _extract_thought(self, content: str) -> Optional[str]:
+    def _extract_thought(self, content: str) -> str | None:
         """Extract the explicit Thought section from a legacy ReAct response."""
         normalized = content.strip()
         if not normalized:
@@ -218,7 +217,7 @@ class ContextBuilder:
 
         return None
 
-    def _extract_final_answer(self, content: str) -> Optional[str]:
+    def _extract_final_answer(self, content: str) -> str | None:
         """Extract the final answer, tolerating slightly off-format model output."""
         normalized = content.strip()
         if not normalized:
@@ -237,7 +236,7 @@ class ContextBuilder:
 
         if "Thought:" in normalized and "Action:" not in normalized:
             last_thought_idx = normalized.rfind("Thought:")
-            after_thought = normalized[last_thought_idx + len("Thought:"):].strip()
+            after_thought = normalized[last_thought_idx + len("Thought:") :].strip()
             if after_thought:
                 return after_thought
 
@@ -246,7 +245,7 @@ class ContextBuilder:
 
         return None
 
-    def _extract_section(self, content: str, section_name: str) -> Optional[str]:
+    def _extract_section(self, content: str, section_name: str) -> str | None:
         """Extract a labeled ReAct section from the content."""
         if not content:
             return None
@@ -266,11 +265,9 @@ class ContextBuilder:
         if fenced:
             return fenced.group(1).strip()
         return text
-    
+
     def _build_system_prompt(self, current_message: str) -> str:
-        """
-        Build the system prompt with metadata-only skill catalogs.
-        """
+        """Build the system prompt with metadata-only skill catalogs."""
         base_prompt = """You are OwnBot, a helpful AI assistant.
 
 Your job is to answer the user's request accurately, using tools only when they are actually needed.
@@ -292,7 +289,7 @@ Response rules:
         skills_prompt = self._build_skill_catalog_prompt()
         if skills_prompt:
             base_prompt += "\n\n" + skills_prompt
-        
+
         return base_prompt
 
     def _load_skill_catalogs(self) -> None:
@@ -309,7 +306,9 @@ Response rules:
                 self.builtin_skills_dir,
             )
         except Exception as e:
-            logger.warning("Failed to load built-in skill summaries from {}: {}", self.builtin_skills_dir, e)
+            logger.warning(
+                "Failed to load built-in skill summaries from {}: {}", self.builtin_skills_dir, e
+            )
             self.builtin_skill_summaries = []
 
         try:
@@ -324,11 +323,17 @@ Response rules:
                 self.workspace_skills_dir,
             )
         except Exception as e:
-            logger.warning("Failed to load workspace skill summaries from {}: {}", self.workspace_skills_dir, e)
+            logger.warning(
+                "Failed to load workspace skill summaries from {}: {}", self.workspace_skills_dir, e
+            )
             self.workspace_skill_summaries = []
 
-        self._builtin_skill_catalog_fingerprint = self._compute_skill_catalog_fingerprint(self.builtin_skills_dir)
-        self._workspace_skill_catalog_fingerprint = self._compute_skill_catalog_fingerprint(self.workspace_skills_dir)
+        self._builtin_skill_catalog_fingerprint = self._compute_skill_catalog_fingerprint(
+            self.builtin_skills_dir
+        )
+        self._workspace_skill_catalog_fingerprint = self._compute_skill_catalog_fingerprint(
+            self.workspace_skills_dir
+        )
 
     def _refresh_skill_catalogs_if_needed(self) -> None:
         """Refresh skill catalogs only when the skill directories have changed."""
@@ -374,23 +379,35 @@ Response rules:
             return ""
 
         lines = ["## Skill Catalog\n"]
-        lines.append("The entries below are metadata only. Read the full `SKILL.md` only when a skill is relevant.\n")
+        lines.append(
+            "The entries below are metadata only. Read the full `SKILL.md` only when a skill is relevant.\n"
+        )
 
         lines.append("### Built-in Skills\n")
         if self.builtin_skill_summaries:
-            lines.append("These skills ship with OwnBot. Their files live in the repository, not in the workspace.\n")
-            lines.extend(self._format_skill_summary_lines(self.builtin_skill_summaries, source="builtin"))
+            lines.append(
+                "These skills ship with OwnBot. Their files live in the repository, not in the workspace.\n"
+            )
+            lines.extend(
+                self._format_skill_summary_lines(self.builtin_skill_summaries, source="builtin")
+            )
         else:
             lines.append("No built-in skills found.\n")
 
         lines.append("\n### Workspace Skills\n")
         if self.workspace_skill_summaries:
-            lines.append("These skills are user-installed under `~/.ownbot/workspace/skills/`. Use the exact `doc_path` shown below.\n")
-            lines.extend(self._format_skill_summary_lines(self.workspace_skill_summaries, source="workspace"))
+            lines.append(
+                "These skills are user-installed under `~/.ownbot/workspace/skills/`. Use the exact `doc_path` shown below.\n"
+            )
+            lines.extend(
+                self._format_skill_summary_lines(self.workspace_skill_summaries, source="workspace")
+            )
         else:
             lines.append("No workspace skills installed.\n")
 
-        lines.append("\nChoose skills yourself based on relevance; there is no query-time vector filtering in this prompt.")
+        lines.append(
+            "\nChoose skills yourself based on relevance; there is no query-time vector filtering in this prompt."
+        )
         return "\n".join(lines)
 
     @staticmethod
@@ -413,18 +430,17 @@ Response rules:
         if not text:
             return True
         return any(re.match(pattern, text, re.IGNORECASE) for pattern in cls._SMALL_TALK_PATTERNS)
-    
+
     def build_index(self, force_rebuild: bool = False) -> int:
-        """
-        Build or rebuild the skill vector index.
-        
+        """Build or rebuild the skill vector index.
+
         Args:
             force_rebuild: If True, rebuild even if index exists
-            
+
         Returns:
             Number of skills indexed
         """
         if self.skill_retriever is None:
             raise RuntimeError("RAG retriever not initialized")
-        
+
         return self.skill_retriever.build_index(force_rebuild=force_rebuild)

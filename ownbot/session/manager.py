@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from loguru import logger
 
@@ -12,8 +11,7 @@ from ownbot.session.base import Session
 
 
 class SessionManager:
-    """
-    Manages conversation sessions.
+    """Manages conversation sessions.
 
     Sessions are stored as JSONL files in the sessions directory.
     """
@@ -40,8 +38,7 @@ class SessionManager:
         return session_dir
 
     def _get_session_path(self, key: str) -> Path:
-        """
-        Get the file path for a session.
+        """Get the file path for a session.
 
         Args:
             key: Session key
@@ -53,8 +50,7 @@ class SessionManager:
         return session_dir / "session.jsonl"
 
     def _load(self, key: str) -> Session | None:
-        """
-        Load a session from disk.
+        """Load a session from disk.
 
         Args:
             key: Session key
@@ -72,7 +68,7 @@ class SessionManager:
             created_at = None
             updated_at = None
 
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -84,7 +80,7 @@ class SessionManager:
                             "key": data.get("key"),
                             "created_at": data.get("created_at"),
                             "updated_at": data.get("updated_at"),
-                            "metadata": data.get("metadata", {})
+                            "metadata": data.get("metadata", {}),
                         }
                         if data.get("created_at"):
                             created_at = datetime.fromisoformat(data["created_at"])
@@ -99,7 +95,7 @@ class SessionManager:
                     messages=messages,
                     created_at=created_at,
                     updated_at=updated_at,
-                    metadata=metadata
+                    metadata=metadata,
                 )
         except Exception as e:
             logger.error("Error loading session {}: {}", key, e)
@@ -107,8 +103,7 @@ class SessionManager:
         return None
 
     def get_or_create(self, key: str) -> Session:
-        """
-        Get an existing session or create a new one.
+        """Get an existing session or create a new one.
 
         Args:
             key: Session key (usually channel:chat_id)
@@ -127,8 +122,7 @@ class SessionManager:
         return session
 
     def save(self, session: Session) -> None:
-        """
-        Save a session to disk.
+        """Save a session to disk.
 
         Args:
             session: Session to save
@@ -141,7 +135,7 @@ class SessionManager:
                 "key": session.key,
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
-                "metadata": session.metadata
+                "metadata": session.metadata,
             }
             f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
             for msg in session.messages:
@@ -150,8 +144,7 @@ class SessionManager:
         self._cache[session.key] = session
 
     def invalidate(self, key: str) -> None:
-        """
-        Invalidate a session from cache.
+        """Invalidate a session from cache.
 
         Args:
             key: Session key to invalidate
@@ -160,8 +153,7 @@ class SessionManager:
             del self._cache[key]
 
     def list_sessions(self) -> list[str]:
-        """
-        List all session keys.
+        """List all session keys.
 
         Returns:
             List of session keys
@@ -180,8 +172,7 @@ class SessionManager:
         return session_keys
 
     def delete_session(self, key: str) -> bool:
-        """
-        Delete a session.
+        """Delete a session.
 
         Args:
             key: Session key to delete

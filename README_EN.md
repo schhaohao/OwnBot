@@ -51,9 +51,11 @@ There are many Agent frameworks available (like LangChain, LangGraph, AutoGPT, e
 
 - **🚀 Multi-Platform Support** - Support both Telegram and WhatsApp simultaneously
 - **🧠 Intelligent Architecture** - Based on ReAct (Reasoning + Acting) for complex task handling
+- **🔌 MCP Protocol Support** - Integrate Model Context Protocol to access thousands of external tools
+- **📊 Real-time Progress** - Show thinking steps and tool execution status during processing
 - **🛠️ Tool System** - Built-in tools for file operations, shell commands, web requests, etc.
 - **📦 Skill System** - Modular skill design for easy feature extension (e.g., weather queries)
-- **💾 Memory Management** - Smart session management with memory consolidation
+- **💾 Memory Management** - Simple sliding window, keeps recent conversation history
 - **⚡ Async High Performance** - Built on Python asyncio for high concurrency
 - **🔧 Easy to Extend** - Clear modular design for secondary development
 
@@ -79,11 +81,11 @@ We welcome all forms of feedback and suggestions!
 - [X] Basic tool system (file, shell, network)
 - [X] Skill system framework
 - [X] Session, memory management
+- [X] 🔌 **MCP Protocol Support** - Integrate Model Context Protocol to seamlessly use external tools
 
 #### 🚧 In Progress
 
 - [ ] 👤 **Human-in-the-Loop** - Require human confirmation for critical operations
-- [ ] 🔌 **MCP Protocol Support** - Integrate Model Context Protocol
 - [ ] More comprehensive documentation and tutorials
 - [ ] More built-in skills (calendar, email, etc.)
 
@@ -144,6 +146,9 @@ We welcome all forms of feedback and suggestions!
 │  │    Tools     │  │   Skills     │  │    LLM       │          │
 │  │ (File/Shell) │  │ (Weather/Ext)│  │  (DeepSeek)  │          │
 │  └──────────────┘  └──────────────┘  └──────────────┘          │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  🔌 MCP Tools (filesystem/sqlite/github/...)             │    │
+│  └─────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -291,6 +296,88 @@ Detailed description of the skill...
 
 ---
 
+## 🔌 MCP (Model Context Protocol) Support
+
+OwnBot supports the MCP protocol, enabling seamless access to thousands of external tools.
+
+### What is MCP?
+
+MCP is an open protocol developed by Anthropic that standardizes how AI interacts with external tools. Through MCP, OwnBot can use:
+
+- 📁 **File System Tools** - Read, write, search files
+- 🗄️ **Database Tools** - SQLite, PostgreSQL queries
+- 🔧 **Development Tools** - GitHub, Git operations
+- 🌐 **Network Tools** - HTTP requests, data fetching
+
+### Configuring MCP
+
+Edit `~/.ownbot/config.json`:
+
+```json
+{
+  "mcp": {
+    "enabled": true,
+    "servers": [
+      {
+        "name": "filesystem",
+        "enabled": true,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+        "timeout": 30
+      },
+      {
+        "name": "sqlite",
+        "enabled": true,
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-sqlite", "--db-path", "/path/to/data.db"],
+        "timeout": 60
+      }
+    ]
+  }
+}
+```
+
+### Using MCP Tools
+
+Once configured, use them through natural language:
+
+- "Read the content of /path/to/file.txt"
+- "Query how many users are in the database"
+- "List all files in /workspace directory"
+
+OwnBot will automatically call the corresponding MCP tool and return the result.
+
+---
+
+## 📊 Real-time Progress Display
+
+OwnBot displays processing progress in real-time when handling complex tasks:
+
+```
+🤔 Thinking about the problem...
+🔧 Step 1: Calling filesystem:list_files...
+✅ Tool execution complete, continuing to think...
+🔄 Round 2 of thinking...
+🔧 Step 2: Calling filesystem:read_file...
+✅ Tool execution complete, continuing to think...
+```
+
+### Progress Status Indicators
+
+| Icon | Meaning |
+|------|---------|
+| 🤔 | Thinking about the problem |
+| 🔄 | Round N of thinking |
+| 🔧 | Calling tool |
+| ✅ | Tool execution successful |
+| ❌ | Tool execution failed |
+
+This allows users to understand the Agent's working status without feeling like it's a "black box".
+
+---
+
 ## 🏗️ System Architecture
 
 ### Core Modules
@@ -359,6 +446,27 @@ Detailed description of the skill...
     "model": "gpt-4",
     "temperature": 0.1,
     "maxTokens": 8192
+  },
+  "mcp": {
+    "enabled": true,
+    "servers": [
+      {
+        "name": "filesystem",
+        "enabled": true,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/workspace"],
+        "timeout": 30
+      },
+      {
+        "name": "sqlite",
+        "enabled": false,
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-sqlite", "--db-path", "/path/to/data.db"],
+        "timeout": 60
+      }
+    ]
   }
 }
 ```
@@ -395,6 +503,38 @@ Detailed description of the skill...
 | `temperature` | float  | 0.1                         | Temperature parameter (0-2) |
 | `maxTokens`   | int    | 8192                        | Maximum token count         |
 
+#### MCP Configuration
+
+| Option      | Type    | Default | Description                    |
+| ----------- | ------- | ------- | ------------------------------ |
+| `enabled` | boolean | false   | Enable MCP tool support        |
+| `servers` | array   | []      | MCP server configuration list  |
+
+**MCP Server Configuration Options:**
+
+| Option        | Type    | Default    | Description                                      |
+| ------------- | ------- | ---------- | ------------------------------------------------ |
+| `name`      | string  | required   | Unique server identifier (e.g., filesystem)      |
+| `enabled`   | boolean | true       | Whether to enable this server                    |
+| `transport` | string  | "stdio"    | Transport type: `stdio` / `sse` / `http`        |
+| `command`   | string  | null       | Command for stdio transport (e.g., npx, python) |
+| `args`      | array   | []         | Command arguments                                |
+| `url`       | string  | null       | Server URL for sse/http transport                |
+| `env`       | object  | {}         | Environment variables (e.g., API keys)           |
+| `timeout`   | number  | 30         | Request timeout (seconds)                        |
+
+**Popular MCP Servers:**
+
+| Server     | Example Command                                                        | Description            |
+| ---------- | ---------------------------------------------------------------------- | ---------------------- |
+| filesystem | `npx -y @modelcontextprotocol/server-filesystem /path`                 | File system operations |
+| sqlite     | `uvx mcp-server-sqlite --db-path /path/to/db`                          | SQLite database        |
+| github     | `npx -y @modelcontextprotocol/server-github`                           | GitHub API operations  |
+| postgres   | `npx -y @modelcontextprotocol/server-postgres postgresql://localhost/` | PostgreSQL database    |
+| fetch      | `uvx mcp-server-fetch`                                                 | HTTP requests          |
+
+For more MCP servers, refer to [MCP Official Documentation](https://modelcontextprotocol.io/)
+
 ---
 
 ## 🛠️ Development Guide
@@ -425,6 +565,10 @@ ownbot/
 ├── config/               # Configuration
 │   ├── __init__.py
 │   └── schema.py
+├── mcp/                  # MCP Protocol Support (NEW)
+│   ├── __init__.py
+│   ├── client.py        # MCP client manager
+│   └── tools.py         # MCP tool adapters
 ├── skills/               # Skill system
 │   ├── loader.py
 │   ├── models.py
@@ -444,11 +588,11 @@ ownbot/
 async def my_custom_tool(param1: str, param2: int = 10) -> str:
     """
     My custom tool
-  
+
     Args:
         param1: First parameter
         param2: Second parameter, default 10
-  
+
     Returns:
         Processing result
     """
@@ -570,6 +714,7 @@ Thanks to the following open-source projects:
 
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - Telegram Bot framework
 - [@whiskeysockets/baileys](https://github.com/WhiskeySockets/Baileys) - WhatsApp Web API
+- [MCP](https://modelcontextprotocol.io/) - Model Context Protocol, standardized AI tool protocol
 - [Rich](https://github.com/Textualize/rich) - Terminal beautification
 
 ---

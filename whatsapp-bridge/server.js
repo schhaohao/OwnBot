@@ -23,11 +23,11 @@ const logger = pino({ level: 'silent' });
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    
+
     // Fetch latest version info
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`Using Baileys version: ${version}, isLatest: ${isLatest}`);
-    
+
     // Configure socket options
     const socketConfig = {
         version,
@@ -40,7 +40,7 @@ async function connectToWhatsApp() {
         // Logger
         logger: logger
     };
-    
+
     // Add proxy if configured
     if (PROXY_URL) {
         console.log(`Using proxy: ${PROXY_URL}`);
@@ -52,33 +52,33 @@ async function connectToWhatsApp() {
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
-        
+
         if (qr) {
             console.log('╔════════════════════════════════════════════════════════╗');
             console.log('║              SCAN QR CODE WITH WHATSAPP                ║');
             console.log('║  Open WhatsApp → Settings → Linked Devices → Link      ║');
             console.log('╚════════════════════════════════════════════════════════╝');
             qrcode.generate(qr, { small: true });
-            
+
             // Notify all connected clients
             broadcast({ type: 'qr', message: 'Scan QR code to connect' });
         }
-        
+
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            
+
             console.log('Connection closed due to:', lastDisconnect?.error?.message || 'Unknown error');
             console.log('Status code:', statusCode);
             console.log('Reconnecting:', shouldReconnect);
-            
-            broadcast({ 
-                type: 'status', 
+
+            broadcast({
+                type: 'status',
                 status: 'disconnected',
                 message: lastDisconnect?.error?.message || 'Connection closed',
                 code: statusCode
             });
-            
+
             if (shouldReconnect) {
                 setTimeout(connectToWhatsApp, 5000);
             }
@@ -99,11 +99,11 @@ async function connectToWhatsApp() {
 
         const sender = msg.key.remoteJid;
         const senderName = msg.pushName || 'Unknown';
-        
+
         // Extract message content
         let content = '';
         let media = [];
-        
+
         if (msg.message.conversation) {
             content = msg.message.conversation;
         } else if (msg.message.extendedTextMessage) {
@@ -151,13 +151,13 @@ function broadcast(data) {
 async function startServer() {
     // Start WebSocket server
     wss = new WebSocket.Server({ port: PORT });
-    
+
     console.log(`WhatsApp Bridge Server running on ws://localhost:${PORT}`);
-    
+
     wss.on('connection', (ws) => {
         console.log('✅ New client connected');
         clients.add(ws);
-        
+
         // Send current connection status
         ws.send(JSON.stringify({
             type: 'status',
@@ -167,10 +167,10 @@ async function startServer() {
         ws.on('message', async (data) => {
             try {
                 const msg = JSON.parse(data);
-                
+
                 if (msg.type === 'send') {
                     const { to, text } = msg;
-                    
+
                     if (!sock) {
                         ws.send(JSON.stringify({
                             type: 'error',

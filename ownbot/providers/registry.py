@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
 
 
 @dataclass
 class ProviderSpec:
     """LLM provider specification."""
+
     name: str
-    keywords: List[str]
+    keywords: list[str]
     is_local: bool = False
     is_gateway: bool = False
     is_oauth: bool = False
-    default_api_base: Optional[str] = None
-    detect_by_base_keyword: Optional[str] = None
+    default_api_base: str | None = None
+    detect_by_base_keyword: str | None = None
 
 
-PROVIDERS: List[ProviderSpec] = [
+PROVIDERS: list[ProviderSpec] = [
     ProviderSpec(
         name="openai",
         keywords=["gpt", "openai"],
@@ -31,7 +31,7 @@ PROVIDERS: List[ProviderSpec] = [
 ]
 
 
-def find_by_name(name: str) -> Optional[ProviderSpec]:
+def find_by_name(name: str) -> ProviderSpec | None:
     """Find provider spec by name."""
     for spec in PROVIDERS:
         if spec.name == name:

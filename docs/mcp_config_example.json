@@ -1,0 +1,94 @@
+{
+  "_comment": "MCP 配置示例文件 - 复制到 ~/.ownbot/config.json 中使用",
+
+  "adminIds": ["your_telegram_user_id"],
+
+  "telegram": {
+    "enabled": true,
+    "token": "YOUR_BOT_TOKEN",
+    "allowFrom": ["*"],
+    "groupPolicy": "mention"
+  },
+
+  "whatsapp": {
+    "enabled": false,
+    "bridgeUrl": "ws://localhost:3001",
+    "allowFrom": ["*"]
+  },
+
+  "llm": {
+    "apiBase": "https://api.openai.com/v1",
+    "apiKey": "YOUR_API_KEY",
+    "model": "gpt-4.1-mini",
+    "temperature": 0.1,
+    "maxTokens": 8192
+  },
+
+  "retrieval": {
+    "enabled": true,
+    "useMilvusLite": true,
+    "milvusDbPath": "./milvus_data/ownbot.db",
+    "topK": 50
+  },
+
+  "mcp": {
+    "_comment": "MCP (Model Context Protocol) 配置",
+    "enabled": true,
+    "servers": [
+      {
+        "name": "filesystem",
+        "enabled": true,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/YOUR_USERNAME/workspace"],
+        "env": {},
+        "timeout": 30
+      },
+      {
+        "name": "sqlite",
+        "enabled": false,
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-sqlite", "--db-path", "/Users/YOUR_USERNAME/data.db"],
+        "env": {},
+        "timeout": 60
+      },
+      {
+        "name": "github",
+        "enabled": false,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxxxxxxxxxxx"
+        },
+        "timeout": 30
+      },
+      {
+        "name": "postgres",
+        "enabled": false,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
+        "env": {},
+        "timeout": 60
+      },
+      {
+        "name": "fetch",
+        "enabled": false,
+        "transport": "stdio",
+        "command": "uvx",
+        "args": ["mcp-server-fetch"],
+        "env": {},
+        "timeout": 30
+      },
+      {
+        "name": "remote",
+        "enabled": false,
+        "transport": "sse",
+        "url": "http://localhost:3000/sse",
+        "timeout": 30
+      }
+    ]
+  }
+}

@@ -5,11 +5,9 @@ import json
 import mimetypes
 import os
 import subprocess
-import sys
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, Optional
 
 from loguru import logger
 
@@ -20,8 +18,7 @@ from ownbot.config.schema import WhatsAppConfig
 
 
 class WhatsAppChannel(BaseChannel):
-    """
-    WhatsApp channel that connects to a Node.js bridge.
+    """WhatsApp channel that connects to a Node.js bridge.
 
     The bridge uses @whiskeysockets/baileys to handle the WhatsApp Web protocol.
     Communication between Python and Node.js is via WebSocket.
@@ -35,7 +32,7 @@ class WhatsAppChannel(BaseChannel):
         self.config: WhatsAppConfig = config
         self._ws = None
         self._connected = False
-        self._bridge_process: Optional[subprocess.Popen] = None
+        self._bridge_process: subprocess.Popen | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
         self._bridge_dir = Path(__file__).parent.parent.parent / "whatsapp-bridge"
         self._auth_dir = Path.home() / ".ownbot" / "workspace" / "whatsapp-auth"
@@ -44,20 +41,20 @@ class WhatsAppChannel(BaseChannel):
         """Ensure the bridge is installed."""
         bridge_package_json = self._bridge_dir / "package.json"
         node_modules = self._bridge_dir / "node_modules"
-        
+
         if not bridge_package_json.exists():
             logger.error("WhatsApp bridge not found at {}", self._bridge_dir)
             return False
-        
+
         if not node_modules.exists():
             logger.info("Installing WhatsApp bridge dependencies...")
             try:
-                subprocess.run(
+                subprocess.run(  # nosec B603,B607
                     ["npm", "install"],
                     cwd=self._bridge_dir,
                     check=True,
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 logger.info("WhatsApp bridge dependencies installed successfully")
             except subprocess.CalledProcessError as e:
@@ -66,50 +63,50 @@ class WhatsAppChannel(BaseChannel):
             except FileNotFoundError:
                 logger.error("npm not found. Please install Node.js and npm first.")
                 return False
-        
+
         return True
 
     def _start_bridge_server(self) -> bool:
         """Start the bridge server."""
         if not self._ensure_bridge_installed():
             return False
-        
+
         # Ensure auth directory exists
         self._auth_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Check if bridge is already running
         if self._is_bridge_running():
             logger.info("WhatsApp bridge is already running")
             return True
-        
+
         logger.info("Starting WhatsApp bridge server...")
-        
+
         try:
             env = os.environ.copy()
             env["PORT"] = "3001"
             env["AUTH_DIR"] = str(self._auth_dir)
-            
+
             # Start the bridge server - output directly to terminal so user can see QR code
-            self._bridge_process = subprocess.Popen(
+            self._bridge_process = subprocess.Popen(  # nosec B603,B607
                 ["node", "server.js"],
                 cwd=self._bridge_dir,
                 env=env,
                 stdout=None,  # Use parent's stdout
                 stderr=None,  # Use parent's stderr
-                text=True
+                text=True,
             )
-            
+
             # Wait a bit for the server to start
             time.sleep(3)
-            
+
             # Check if process is still running
             if self._bridge_process.poll() is not None:
                 logger.error("Bridge server failed to start")
                 return False
-            
+
             logger.info("WhatsApp bridge server started on pid {}", self._bridge_process.pid)
             return True
-            
+
         except Exception as e:
             logger.error("Failed to start bridge server: {}", e)
             return False
@@ -118,9 +115,10 @@ class WhatsAppChannel(BaseChannel):
         """Check if bridge server is already running."""
         try:
             import socket
+
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1)
-            result = sock.connect_ex(('localhost', 3001))
+            result = sock.connect_ex(("localhost", 3001))
             sock.close()
             return result == 0
         except:
@@ -158,7 +156,9 @@ class WhatsAppChannel(BaseChannel):
                     self._ws = ws
                     # Send auth token if configured
                     if self.config.bridge_token:
-                        await ws.send(json.dumps({"type": "auth", "token": self.config.bridge_token}))
+                        await ws.send(
+                            json.dumps({"type": "auth", "token": self.config.bridge_token})
+                        )
                     self._connected = True
                     logger.info("Connected to WhatsApp bridge")
 
@@ -188,7 +188,7 @@ class WhatsAppChannel(BaseChannel):
         if self._ws:
             await self._ws.close()
             self._ws = None
-        
+
         self._stop_bridge_server()
 
     async def send(self, msg: OutboundMessage) -> None:
@@ -198,11 +198,7 @@ class WhatsAppChannel(BaseChannel):
             return
 
         try:
-            payload = {
-                "type": "send",
-                "to": msg.chat_id,
-                "text": msg.content
-            }
+            payload = {"type": "send", "to": msg.chat_id, "text": msg.content}
             await self._ws.send(json.dumps(payload, ensure_ascii=False))
         except Exception as e:
             logger.error("Error sending WhatsApp message: {}", e)
@@ -245,7 +241,10 @@ class WhatsAppChannel(BaseChannel):
 
             # Handle voice transcription if it's a voice message
             if content == "[Voice Message]":
-                logger.info("Voice message received from {}, but direct download from bridge is not yet supported.", sender_id)
+                logger.info(
+                    "Voice message received from {}, but direct download from bridge is not yet supported.",
+                    sender_id,
+                )
                 content = "[Voice Message: Transcription not available for WhatsApp yet]"
 
             # Extract media paths (images/documents/videos downloaded by the bridge)
@@ -267,8 +266,8 @@ class WhatsAppChannel(BaseChannel):
                 metadata={
                     "message_id": message_id,
                     "timestamp": data.get("timestamp"),
-                    "is_group": data.get("isGroup", False)
-                }
+                    "is_group": data.get("isGroup", False),
+                },
             )
 
         elif msg_type == "status":
@@ -286,4 +285,4 @@ class WhatsAppChannel(BaseChannel):
             logger.info("Scan QR code in the bridge terminal to connect WhatsApp")
 
         elif msg_type == "error":
-            logger.error("WhatsApp bridge error: {}", data.get('error'))
+            logger.error("WhatsApp bridge error: {}", data.get("error"))

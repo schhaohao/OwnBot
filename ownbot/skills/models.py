@@ -10,10 +10,10 @@ from typing import Any
 @dataclass
 class SkillMetadata:
     """Skill metadata from YAML frontmatter."""
-    
+
     emoji: str = "🔧"
     requires: dict[str, Any] = field(default_factory=dict)
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SkillMetadata:
         """Create metadata from dictionary."""
@@ -26,13 +26,13 @@ class SkillMetadata:
 @dataclass
 class Skill:
     """A skill definition loaded from SKILL.md."""
-    
+
     name: str
     description: str
     content: str
     metadata: SkillMetadata
     path: Path | None = None
-    
+
     @property
     def system_prompt_addition(self) -> str:
         """Generate system prompt addition for this skill."""
@@ -43,7 +43,7 @@ class Skill:
             self.content,
         ]
         return "\n".join(lines)
-    
+
     def to_tool_description(self) -> dict[str, Any]:
         """Convert skill to a tool-like description for the LLM."""
         return {
